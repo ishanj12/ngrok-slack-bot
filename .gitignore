@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+.venv/
+*.egg-info/
+dist/
+build/
+
+# Environment
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Data (large files)
+data/vectorstore/
+data/raw/
+
+# ngrok-mcp (cloned separately)
+ngrok-mcp/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

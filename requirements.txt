@@ -1,0 +1,25 @@
+# Slack Integration
+slack-bolt
+
+# MCP Client
+mcp
+
+# LLM (for synthesized responses)
+openai
+
+# LLM (optional, for enhanced responses)
+langchain
+langchain-community
+langchain-openai
+
+# Document Processing (optional, for fallback)
+beautifulsoup4
+requests
+lxml
+pypdf
+tiktoken
+
+# Utilities
+python-dotenv
+pydantic
+pyyaml
