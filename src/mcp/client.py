@@ -3,10 +3,8 @@ MCP Client for ngrok-mcp server.
 Connects to the ngrok-mcp server via stdio and provides methods to interact with ngrok documentation.
 """
 
-import asyncio
 import json
 import os
-from contextlib import asynccontextmanager
 from typing import Any
 
 from mcp import ClientSession, StdioServerParameters, types
@@ -28,6 +26,8 @@ class NgrokMCPClient:
     
     _instance: "NgrokMCPClient | None" = None
     _session: ClientSession | None = None
+    _session_context: ClientSession | None = None
+    _stdio_context = None
     _read = None
     _write = None
     _connected: bool = False
@@ -418,17 +418,4 @@ If context lacks answer: "Hmm, I don't have docs for that. Check https://ngrok.c
         return await self.call_tool("docs_cache_status", {})
 
 
-@asynccontextmanager
-async def get_mcp_client():
-    """
-    Context manager for getting an MCP client connection.
-    
-    Usage:
-        async with get_mcp_client() as client:
-            result = await client.search_docs("tunnels")
-    """
-    client = await NgrokMCPClient.connect()
-    try:
-        yield client
-    finally:
-        pass  # Keep connection alive for reuse
+

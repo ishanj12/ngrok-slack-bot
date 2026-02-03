@@ -7,7 +7,7 @@ Provides a simple interface for handlers to search and retrieve ngrok documentat
 import asyncio
 import threading
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Coroutine
 
 from .client import NgrokMCPClient
 
@@ -31,7 +31,7 @@ def _get_event_loop() -> asyncio.AbstractEventLoop:
     return _loop
 
 
-def run_in_background(coro) -> Any:
+def run_in_background(coro: Coroutine[Any, Any, Any]) -> Any:
     """Run a coroutine in the background event loop and wait for result."""
     loop = _get_event_loop()
     future = asyncio.run_coroutine_threadsafe(coro, loop)
@@ -138,11 +138,6 @@ class NgrokAssistant:
             return [f"Error listing docs: {e}"]
 
 
-def run_async(coro):
-    """Run an async coroutine from sync code using the background event loop."""
-    return run_in_background(coro)
-
-
 _assistant: NgrokAssistant | None = None
 
 
@@ -150,14 +145,8 @@ def get_assistant() -> NgrokAssistant:
     """Get or create the global assistant instance (sync wrapper)."""
     global _assistant
     if _assistant is None:
-        _assistant = run_async(NgrokAssistant.initialize())
+        _assistant = run_in_background(NgrokAssistant.initialize())
     return _assistant
-
-
-def search_ngrok_docs(query: str) -> list[DocResult]:
-    """Sync wrapper to search ngrok documentation."""
-    assistant = get_assistant()
-    return run_async(assistant.search_docs(query))
 
 
 def ask_ngrok(query: str) -> str:
@@ -172,15 +161,3 @@ async def _ask_ngrok_async(query: str) -> str:
     """Async implementation of ask_ngrok."""
     client = await NgrokMCPClient.connect()
     return await client.ask(query)
-
-
-def get_ngrok_doc(path: str) -> DocResult:
-    """Sync wrapper to get a specific ngrok document."""
-    assistant = get_assistant()
-    return run_async(assistant.get_doc(path))
-
-
-def list_ngrok_docs() -> list[str]:
-    """Sync wrapper to list available ngrok documentation."""
-    assistant = get_assistant()
-    return run_async(assistant.list_docs())

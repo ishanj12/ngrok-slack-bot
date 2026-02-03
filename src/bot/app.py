@@ -1,10 +1,7 @@
 import os
-import sys
 from dotenv import load_dotenv
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
-
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 
 load_dotenv()
 
@@ -36,17 +33,31 @@ def handle_help_command(ack, command, say):
 
 
 @app.command("/ngrok-ask")
-def handle_ask_command(ack, command, say):
+def handle_ask_command(ack, command, say, logger):
     """Handle /ngrok-ask slash command"""
     from src.bot.handlers import handle_ask
-    handle_ask(ack, command, say)
+    handle_ask(ack, command, say, logger)
 
 
 @app.command("/ngrok-yaml")
-def handle_yaml_command(ack, command, say):
+def handle_yaml_command(ack, command, say, logger):
     """Handle /ngrok-yaml slash command"""
     from src.bot.handlers import handle_yaml
-    handle_yaml(ack, command, say)
+    handle_yaml(ack, command, say, logger)
+
+
+@app.command("/ngrok-ticket")
+def handle_ticket_command(ack, command, client, logger):
+    """Handle /ngrok-ticket slash command - opens ticket creation modal"""
+    from src.bot.handlers import handle_ticket_command
+    handle_ticket_command(ack, command, client, logger)
+
+
+@app.view("ticket_submission")
+def handle_ticket_submission(ack, body, client, view, logger):
+    """Handle ticket modal submission"""
+    from src.bot.handlers import handle_ticket_submission
+    handle_ticket_submission(ack, body, client, view, logger)
 
 
 def start():

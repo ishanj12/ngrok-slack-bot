@@ -5,10 +5,7 @@ Uses MCP client to connect to ngrok-mcp server
 """
 
 import sys
-import os
 import asyncio
-
-sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -31,49 +28,6 @@ class NgrokChatCLI:
     async def shutdown(self):
         """Shutdown the MCP client connection."""
         await NgrokMCPClient.disconnect()
-    
-    def format_response(self, results: list[dict]) -> str:
-        """Format search results for CLI display"""
-        if not results:
-            return "\n❌ No results found."
-        
-        response = []
-        response.append("\n" + "=" * 80)
-        response.append("📚 ngrok Documentation Results")
-        response.append("=" * 80)
-        
-        for i, result in enumerate(results[:3], 1):
-            title = result.get("title", "Untitled")
-            link = result.get("link", "")
-            content = result.get("content", "")
-            code = result.get("code_example", "")
-            
-            response.append(f"\n[{i}] {title}")
-            if link:
-                response.append(f"    🔗 {link}")
-            response.append("-" * 80)
-            
-            # Show content preview
-            if content:
-                # Truncate to ~300 chars
-                preview = content[:300].strip()
-                if len(content) > 300:
-                    preview += "..."
-                response.append(preview)
-            
-            # Show code example if available
-            if code:
-                response.append("\n📝 Example:")
-                response.append("```yaml")
-                # Limit code to first 15 lines
-                code_lines = code.split('\n')[:15]
-                response.append('\n'.join(code_lines))
-                if len(code.split('\n')) > 15:
-                    response.append("...")
-                response.append("```")
-        
-        response.append("\n" + "=" * 80)
-        return "\n".join(response)
     
     async def ask(self, question: str):
         """Ask a question and get a synthesized answer"""

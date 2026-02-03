@@ -7,5 +7,8 @@ mcp
 # LLM (for synthesized responses)
 openai
 
+# HTTP requests (for Zendesk API)
+requests
+
 # Utilities
 python-dotenv

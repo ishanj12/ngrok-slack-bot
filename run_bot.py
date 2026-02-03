@@ -5,14 +5,11 @@ ngrok Slack Bot - Documentation Assistant
 This bot helps users find information in the ngrok documentation.
 """
 
-import asyncio
 import atexit
 import os
 import signal
 import sys
 from dotenv import load_dotenv
-
-sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
 load_dotenv()
 
