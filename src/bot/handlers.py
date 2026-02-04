@@ -1,6 +1,14 @@
+import json
+import os
 import re
 
 from src.mcp.ngrok_assistant import ask_ngrok
+
+try:
+    from openai import OpenAI
+    HAS_OPENAI = True
+except ImportError:
+    HAS_OPENAI = False
 
 
 def _ask_and_respond(query: str, say, logger, thread_ts: str | None = None, searching_msg: str = "🔍 Searching ngrok documentation...") -> None:
@@ -11,6 +19,19 @@ def _ask_and_respond(query: str, say, logger, thread_ts: str | None = None, sear
     
     if answer and not answer.startswith("Error"):
         blocks = format_answer_for_slack(answer)
+        blocks.append({"type": "divider"})
+        blocks.append({
+            "type": "actions",
+            "elements": [
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "🎫 Create Support Ticket"},
+                    "style": "primary",
+                    "action_id": "create_ticket_from_conversation",
+                    "value": json.dumps({"question": query[:500], "answer": answer[:1000]})
+                }
+            ]
+        })
         say(text=answer[:200], blocks=blocks, thread_ts=thread_ts)
     else:
         logger.error(f"MCP error: {answer}")
@@ -309,4 +330,147 @@ def handle_ticket_submission(ack, body, client, view, logger):
         client.chat_postMessage(
             channel=user_id,
             text=f"❌ Sorry, there was an error creating your ticket: {str(e)}"
+        )
+
+
+def synthesize_ticket_content(question: str, answer: str) -> dict:
+    """Use OpenAI to synthesize a ticket subject and description from conversation."""
+    if not HAS_OPENAI or not os.environ.get("OPENAI_API_KEY"):
+        return {
+            "subject": question[:100],
+            "description": f"Original question:\n{question}\n\nBot response:\n{answer}"
+        }
+    
+    client = OpenAI()
+    
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {
+                "role": "system",
+                "content": """You synthesize support ticket content from user conversations with an ngrok documentation bot.
+
+Given the user's question and the bot's answer, create:
+1. A concise ticket subject (max 100 chars) that captures the user's core issue
+2. A clear description that explains what the user needs help with
+
+Respond in JSON format:
+{"subject": "...", "description": "..."}
+
+The description should:
+- Summarize what the user was trying to accomplish
+- Note what information the bot provided
+- Indicate why additional support may be needed"""
+            },
+            {
+                "role": "user",
+                "content": f"User question: {question}\n\nBot answer: {answer}"
+            }
+        ],
+        temperature=0.3,
+        max_tokens=500
+    )
+    
+    try:
+        content = response.choices[0].message.content
+        content = content.strip()
+        if content.startswith("```"):
+            content = content.split("\n", 1)[1].rsplit("```", 1)[0]
+        return json.loads(content)
+    except (json.JSONDecodeError, IndexError):
+        return {
+            "subject": question[:100],
+            "description": f"Original question:\n{question}\n\nBot response:\n{answer}"
+        }
+
+
+def handle_create_ticket_button(ack, body, client, logger):
+    """Handle the 'Create Support Ticket' button click from conversation."""
+    ack()
+    
+    try:
+        action = body["actions"][0]
+        conversation_data = json.loads(action["value"])
+        question = conversation_data.get("question", "")
+        answer = conversation_data.get("answer", "")
+        
+        ticket_content = synthesize_ticket_content(question, answer)
+        
+        client.views_open(
+            trigger_id=body["trigger_id"],
+            view={
+                "type": "modal",
+                "callback_id": "ticket_submission",
+                "title": {"type": "plain_text", "text": "Create Support Ticket"},
+                "submit": {"type": "plain_text", "text": "Submit Ticket"},
+                "close": {"type": "plain_text", "text": "Cancel"},
+                "blocks": [
+                    {
+                        "type": "context",
+                        "elements": [
+                            {
+                                "type": "mrkdwn",
+                                "text": "📝 *Pre-filled from your conversation.* Feel free to edit."
+                            }
+                        ]
+                    },
+                    {
+                        "type": "input",
+                        "block_id": "subject_block",
+                        "element": {
+                            "type": "plain_text_input",
+                            "action_id": "subject",
+                            "initial_value": ticket_content.get("subject", "")[:150],
+                            "placeholder": {"type": "plain_text", "text": "Brief description of your issue"}
+                        },
+                        "label": {"type": "plain_text", "text": "Subject"}
+                    },
+                    {
+                        "type": "input",
+                        "block_id": "description_block",
+                        "element": {
+                            "type": "plain_text_input",
+                            "action_id": "description",
+                            "multiline": True,
+                            "initial_value": ticket_content.get("description", "")[:3000],
+                            "placeholder": {"type": "plain_text", "text": "Describe your issue in detail..."}
+                        },
+                        "label": {"type": "plain_text", "text": "Description"}
+                    },
+                    {
+                        "type": "input",
+                        "block_id": "email_block",
+                        "element": {
+                            "type": "plain_text_input",
+                            "action_id": "email",
+                            "placeholder": {"type": "plain_text", "text": "your.email@company.com"}
+                        },
+                        "label": {"type": "plain_text", "text": "Your Email"}
+                    },
+                    {
+                        "type": "input",
+                        "block_id": "priority_block",
+                        "element": {
+                            "type": "static_select",
+                            "action_id": "priority",
+                            "placeholder": {"type": "plain_text", "text": "Select priority"},
+                            "options": [
+                                {"text": {"type": "plain_text", "text": "Low"}, "value": "low"},
+                                {"text": {"type": "plain_text", "text": "Normal"}, "value": "normal"},
+                                {"text": {"type": "plain_text", "text": "High"}, "value": "high"},
+                                {"text": {"type": "plain_text", "text": "Urgent"}, "value": "urgent"}
+                            ],
+                            "initial_option": {"text": {"type": "plain_text", "text": "Normal"}, "value": "normal"}
+                        },
+                        "label": {"type": "plain_text", "text": "Priority"}
+                    }
+                ]
+            }
+        )
+    except Exception as e:
+        logger.error(f"Error opening ticket modal from button: {e}")
+        user_id = body["user"]["id"]
+        client.chat_postMessage(
+            channel=user_id,
+            text=f"❌ Sorry, there was an error opening the ticket form: {str(e)}"
         )

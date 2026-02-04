@@ -60,6 +60,13 @@ def handle_ticket_submission(ack, body, client, view, logger):
     handle_ticket_submission(ack, body, client, view, logger)
 
 
+@app.action("create_ticket_from_conversation")
+def handle_ticket_button(ack, body, client, logger):
+    """Handle the 'Create Support Ticket' button click from bot responses"""
+    from src.bot.handlers import handle_create_ticket_button
+    handle_create_ticket_button(ack, body, client, logger)
+
+
 def start():
     """Start the Slack bot"""
     handler = SocketModeHandler(app, os.environ.get("SLACK_APP_TOKEN"))
