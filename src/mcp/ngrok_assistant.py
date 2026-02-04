@@ -161,3 +161,17 @@ async def _ask_ngrok_async(query: str) -> str:
     """Async implementation of ask_ngrok."""
     client = await NgrokMCPClient.connect()
     return await client.ask(query)
+
+
+def generate_ngrok_yaml(request: str) -> str:
+    """Sync wrapper to generate a custom ngrok YAML configuration."""
+    try:
+        return run_in_background(_generate_yaml_async(request))
+    except Exception as e:
+        return f"Error: {e}"
+
+
+async def _generate_yaml_async(request: str) -> str:
+    """Async implementation of generate_ngrok_yaml."""
+    client = await NgrokMCPClient.connect()
+    return await client.generate_yaml(request)

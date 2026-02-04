@@ -2,7 +2,7 @@ import json
 import os
 import re
 
-from src.mcp.ngrok_assistant import ask_ngrok
+from src.mcp.ngrok_assistant import ask_ngrok, generate_ngrok_yaml
 
 try:
     from openai import OpenAI
@@ -192,19 +192,28 @@ def handle_ask(ack, command, say, logger):
 
 
 def handle_yaml(ack, command, say, logger):
-    """Handle /ngrok-yaml command"""
+    """Handle /ngrok-yaml command - generates custom YAML configurations"""
     ack()
     
     request = command.get("text", "").strip()
     
     if not request:
-        say(text="Please describe what you need. Example: `/ngrok-yaml basic authentication config`")
+        say(text="Please describe what you need. Example: `/ngrok-yaml rate limit API to 100 requests per minute`")
         return
     
     try:
-        query = f"Show me a YAML configuration example for: {request}"
-        _ask_and_respond(query, say, logger, searching_msg=f"🔍 Finding YAML configuration for: _{request}_")
+        say(text=f"⚙️ Generating YAML configuration for: _{request}_")
+        
+        result = generate_ngrok_yaml(request)
+        
+        if result and not result.startswith("Error"):
+            blocks = format_answer_for_slack(result)
+            say(text=result[:200], blocks=blocks)
+        else:
+            logger.error(f"YAML generation error: {result}")
+            say(text=f"Sorry, I couldn't generate that configuration: {result}")
     except Exception as e:
+        logger.error(f"Error in handle_yaml: {e}")
         say(text=f"Sorry, I encountered an error: {str(e)}")
 
 

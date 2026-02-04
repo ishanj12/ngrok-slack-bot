@@ -1,8 +1,8 @@
 # Slack Integration
 slack-bolt
 
-# MCP Client
-mcp
+# MCP Client (requires Python 3.10+)
+mcp>=1.0.0
 
 # LLM (for synthesized responses)
 openai

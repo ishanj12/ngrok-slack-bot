@@ -118,11 +118,84 @@ class NgrokMCPClient:
     
     async def search_docs(self, query: str, max_results: int = 3) -> list[dict]:
         """
-        Search ngrok documentation using the search_ngrok_docs tool.
-        Returns parsed list of results with title, link, and content.
+        Search ngrok documentation using index_docs + get_doc for precise retrieval.
+        Falls back to search_ngrok_docs if no indexed results found.
         """
-        raw = await self.call_tool("search_ngrok_docs", {"query": query})
-        return self._parse_search_results(raw, max_results)
+        results = []
+        
+        # First, search the doc index for relevant docs
+        indexed_docs = await self._search_index(query, max_results=max_results)
+        
+        if indexed_docs:
+            # Fetch full content for the top docs
+            for doc in indexed_docs[:max_results]:
+                try:
+                    content = await self._get_doc_content(doc.get("mdUrl") or doc.get("url"))
+                    if content:
+                        results.append({
+                            "title": doc.get("title", "ngrok Documentation"),
+                            "link": doc.get("mdUrl") or doc.get("url", ""),
+                            "content": content[:2000],  # More content since we're fetching directly
+                            "tags": doc.get("tags", [])
+                        })
+                except Exception:
+                    continue
+        
+        # Fall back to search_ngrok_docs if no indexed results
+        if not results:
+            raw = await self.call_tool("search_ngrok_docs", {"query": query})
+            results = self._parse_search_results(raw, max_results)
+        
+        return results
+    
+    async def _search_index(self, query: str, max_results: int = 5) -> list[dict]:
+        """Search the doc index for relevant documents."""
+        try:
+            # Determine relevant tags based on query
+            tags = self._infer_tags(query)
+            
+            raw = await self.call_tool("index_docs", {
+                "query": query,
+                "tags": tags if tags else None,
+                "limit": max_results
+            })
+            
+            data = json.loads(raw) if isinstance(raw, str) else raw
+            return data.get("docs", [])
+        except Exception:
+            return []
+    
+    async def _get_doc_content(self, url: str) -> str | None:
+        """Fetch full content of a specific doc."""
+        if not url:
+            return None
+        try:
+            raw = await self.call_tool("get_doc", {"url": url, "max_length": 4000})
+            data = json.loads(raw) if isinstance(raw, str) else raw
+            return data.get("content", "")
+        except Exception:
+            return None
+    
+    def _infer_tags(self, query: str) -> list[str]:
+        """Infer relevant doc tags from the query."""
+        query_lower = query.lower()
+        tags = []
+        
+        tag_keywords = {
+            "traffic-policy": ["traffic policy", "policy", "rule", "action", "phase"],
+            "actions": ["rewrite", "redirect", "rate limit", "restrict", "forward", "deny", "header", "jwt", "oauth"],
+            "endpoints": ["endpoint", "cloud endpoint", "agent endpoint"],
+            "cel": ["expression", "variable", "cel", "macro", "conn.", "req."],
+            "auth": ["oauth", "oidc", "saml", "jwt", "authentication", "sso"],
+            "tls": ["tls", "https", "certificate", "mtls", "ssl"],
+            "agent": ["agent", "ngrok.yml", "upstream", "local", "tunnel"],
+        }
+        
+        for tag, keywords in tag_keywords.items():
+            if any(kw in query_lower for kw in keywords):
+                tags.append(tag)
+        
+        return tags[:3]  # Limit to top 3 tags
     
     def _parse_search_results(self, raw: str, max_results: int = 3) -> list[dict]:
         """Parse raw MCP search results into structured format."""
@@ -192,124 +265,12 @@ class NgrokMCPClient:
             "code_example": code_example
         }
     
-    def _expand_query(self, query: str) -> str:
-        """Expand query with ngrok-specific terminology."""
-        expansions = {
-            # Security & WAF
-            "waf": "OWASP CRS owasp-crs-request owasp-crs-response security Traffic Policy",
-            "firewall": "OWASP CRS restrict-ips deny security Traffic Policy",
-            "security": "restrict-ips oauth jwt-validation OWASP Traffic Policy",
-            
-            # Authentication & Authorization
-            "authentication": "oauth oidc jwt-validation basic-auth Traffic Policy action",
-            "auth": "oauth oidc jwt-validation basic-auth Traffic Policy action",
-            "oauth": "oauth Traffic Policy action provider Google GitHub Microsoft",
-            "jwt": "jwt-validation Traffic Policy action issuer audience",
-            "sso": "oauth oidc saml Traffic Policy identity provider",
-            "login": "oauth oidc basic-auth Traffic Policy authentication",
-            
-            # Rate Limiting & Traffic Control
-            "rate limit": "rate-limit Traffic Policy action capacity bucket",
-            "throttle": "rate-limit Traffic Policy action",
-            "circuit breaker": "circuit-breaker Traffic Policy action",
-            
-            # IP & Access Control
-            "ip restriction": "restrict-ips Traffic Policy action allow deny CIDR",
-            "ip policy": "restrict-ips ip_policies Traffic Policy",
-            "block": "deny restrict-ips Traffic Policy action",
-            "allowlist": "restrict-ips allow Traffic Policy",
-            "whitelist": "restrict-ips allow Traffic Policy",
-            "blacklist": "restrict-ips deny Traffic Policy",
-            
-            # URL & Request Manipulation
-            "redirect": "redirect Traffic Policy action url status_code",
-            "rewrite": "url-rewrite Traffic Policy action from to",
-            "header": "add-headers remove-headers Traffic Policy action",
-            "cors": "add-headers Traffic Policy Access-Control-Allow-Origin",
-            "custom response": "custom-response Traffic Policy action body status_code",
-            
-            # Endpoints & Configuration
-            "internal endpoint": "AgentEndpoint bindings internal upstream version 3 ngrok.yml",
-            "cloud endpoint": "CloudEndpoint Traffic Policy forward-internal",
-            "agent endpoint": "AgentEndpoint upstream bindings version 3 ngrok.yml",
-            "agent config": "ngrok.yml version 3 endpoints upstream bindings traffic_policy",
-            "config file": "ngrok.yml version 3 endpoints configuration",
-            
-            # Protocols
-            "tcp": "TCP endpoint AgentEndpoint upstream proto tcp",
-            "https": "HTTPS endpoint TLS upstream url",
-            "tls": "TLS agent-tls-termination certificates mutual",
-            "tls termination": "agent-tls-termination mutual TLS mTLS certificates",
-            "mtls": "agent-tls-termination mutual TLS client certificates",
-            "terminate tls": "agent-tls-termination agent TLS termination",
-            "websocket": "WebSocket HTTP endpoint upstream",
-            
-            # Routing & Load Balancing
-            "routing": "forward-internal Traffic Policy url expressions",
-            "forward": "forward-internal Traffic Policy action url",
-            "load balance": "endpoint-pooling weighted failover upstream",
-            "failover": "endpoint-pooling Traffic Policy backup",
-            
-            # Logging & Observability
-            "logging": "log Traffic Policy action metadata event",
-            "log": "log Traffic Policy action event destination",
-            "webhook verification": "verify-webhook Traffic Policy action provider",
-            
-            # Kubernetes
-            "kubernetes": "Kubernetes Operator NgrokTrafficPolicy Ingress Gateway CRD",
-            "k8s": "Kubernetes Operator NgrokTrafficPolicy Ingress CRD",
-            "ingress": "Kubernetes Ingress NgrokTrafficPolicy annotation",
-            
-            # Variables & Expressions  
-            "variable": "conn req res Traffic Policy expressions CEL",
-            "expression": "CEL expressions Traffic Policy conn.client_ip req.headers",
-            "cel": "CEL expressions Traffic Policy macros variables",
-            
-            # Common Use Cases
-            "webhook": "verify-webhook Traffic Policy action provider signature",
-            "api gateway": "Traffic Policy rate-limit jwt-validation forward-internal",
-            "tunnel": "agent endpoint upstream ngrok http ngrok tcp",
-            "domain": "reserved domain custom hostname url",
-            "subdomain": "domain wildcard url endpoint",
-            
-            # Endpoint Types
-            "cloud endpoint": "CloudEndpoint Traffic Policy forward-internal always-on API Dashboard",
-            "agent endpoint": "AgentEndpoint upstream bindings ngrok.yml version 3",
-            "public endpoint": "bindings public endpoint url",
-            "internal": "bindings internal .internal forward-internal",
-            
-            # Configuration
-            "ngrok.yml": "version 3 agent endpoints upstream bindings traffic_policy",
-            "config": "ngrok.yml version 3 endpoints configuration agent",
-            "authtoken": "agent authtoken ngrok.yml configuration",
-            
-            # Traffic Policy Details
-            "forward": "forward-internal Traffic Policy action url CloudEndpoint",
-            "custom response": "custom-response Traffic Policy action body status_code headers",
-            "deny": "deny Traffic Policy action status_code",
-            "phases": "on_http_request on_http_response on_tcp_connect Traffic Policy",
-            
-            # Upstream
-            "upstream": "upstream url protocol proxy_protocol http1 http2",
-            "proxy protocol": "upstream proxy_protocol PROXY protocol",
-            "http2": "upstream protocol http2",
-        }
-        
-        query_lower = query.lower()
-        for term, expansion in expansions.items():
-            if term in query_lower:
-                return f"{query} {expansion}"
-        
-        return query
-
     async def ask(self, question: str, max_results: int = 8) -> str:
         """
         Ask a question and get a synthesized answer from the documentation.
         Uses LLM to generate a concise response from search results.
         """
-        # Expand query with ngrok-specific terminology
-        expanded_query = self._expand_query(question)
-        results = await self.search_docs(expanded_query, max_results=max_results)
+        results = await self.search_docs(question, max_results=max_results)
         
         if not results:
             return "I couldn't find relevant documentation for your question."
@@ -345,49 +306,15 @@ class NgrokMCPClient:
         """Use OpenAI to synthesize a concise answer from search results."""
         client = AsyncOpenAI()
         
-        system_prompt = """Friendly ngrok docs expert. Be concise but warm.
+        system_prompt = """ngrok docs expert. Answer based ONLY on the provided documentation context.
 
 RULES:
-- Start with brief friendly opener ("Sure!", "Absolutely!", "No problem!")
-- 1-2 sentence explanation, then show code ONLY from provided context
-- NEVER invent config fields - only use what's in context
-- End with source URL
-
-AGENT CONFIG v3 (ngrok.yml):
-```
-version: 3
-agent:
-  authtoken: <token>
-endpoints:
-  - name: example
-    url: https://example.ngrok.app  # or tls:// for TLS endpoints
-    upstream:
-      url: 8080
-    bindings: ["public"]  # strings: "public", "internal", or "kubernetes"
-    traffic_policy:
-      on_http_request: [...]
-    agent_tls_termination:  # ONLY for tls:// URLs, terminates TLS at agent
-      server_certificate: <path or PEM>
-      server_private_key: <path or PEM>
-      mutual_tls_certificate_authorities: [<CA certs>]  # for mTLS
-```
-
-TLS TERMINATION - TWO DIFFERENT APPROACHES:
-1. AT THE AGENT (for tls:// endpoints): Use `agent_tls_termination` in ngrok.yml
-   - Docs: https://ngrok.com/docs/agent/agent-tls-termination
-2. AT THE CLOUD (Traffic Policy): Use `terminate-tls` action in on_tcp_connect phase
-   - For Cloud Endpoints or to customize TLS settings
-   - Docs: https://ngrok.com/docs/traffic-policy/actions/terminate-tls
-
-CLOUD ENDPOINTS vs AGENT ENDPOINTS:
-- Cloud Endpoints: Always-on, managed via API/Dashboard, MUST have Traffic Policy ending with terminating action (forward-internal, deny, redirect, custom-response)
-- Agent Endpoints: Created by agent, tied to agent lifetime, implicitly forward to upstream
-
-TRAFFIC POLICY PHASES:
-- on_http_request / on_http_response: For HTTP traffic
-- on_tcp_connect: For TCP/TLS traffic (where terminate-tls goes)
-
-If context lacks answer: "Hmm, I don't have docs for that. Check https://ngrok.com/docs"."""
+- Brief answer (1-2 sentences), then code examples from context
+- ONLY use information from the provided documentation
+- For agent configs: ALWAYS use version: 3 format (never version: 2 or "tunnels:")
+- Include source URL when available
+- If context lacks answer: "I don't have docs for that. Check https://ngrok.com/docs"
+"""
 
         response = await client.chat.completions.create(
             model="gpt-4o-mini",
@@ -397,6 +324,78 @@ If context lacks answer: "Hmm, I don't have docs for that. Check https://ngrok.c
             ],
             temperature=0.3,
             max_tokens=1000
+        )
+        
+        return response.choices[0].message.content
+
+    async def generate_yaml(self, request: str) -> str:
+        """
+        Generate a custom ngrok YAML configuration based on user requirements.
+        Uses LLM with doc context from MCP to craft configs.
+        """
+        if not HAS_OPENAI or not os.environ.get("OPENAI_API_KEY"):
+            return "Error: OpenAI API key required for YAML generation."
+        
+        # Pre-warm relevant doc packs
+        try:
+            await self.call_tool("warm_docs", {"pack": "traffic_policy", "limit": 5})
+            if any(kw in request.lower() for kw in ["endpoint", "internal", "load balance", "upstream"]):
+                await self.call_tool("warm_docs", {"pack": "endpoint_create", "limit": 5})
+        except Exception:
+            pass  # Non-critical, continue without warming
+        
+        # Search docs for relevant context - fetch more for better coverage
+        results = await self.search_docs(request, max_results=8)
+        
+        context_parts = []
+        for r in results:
+            if r.get('content'):
+                context_parts.append(f"# {r.get('title', 'Doc')}\n{r.get('content', '')}")
+        
+        doc_context = "\n\n".join(context_parts) if context_parts else ""
+        
+        client = AsyncOpenAI()
+        
+        system_prompt = """ngrok config expert.
+
+OUTPUT: One sentence, then YAML only.
+
+VALID AGENT CONFIG FIELDS (use ONLY these):
+```yaml
+version: 3
+endpoints:
+  - name: <string>
+    url: <https://domain.ngrok.app or tcp:// or tls://>
+    upstream:
+      url: <port or address>
+    bindings:
+      - public    # or internal
+    traffic_policy:
+      on_http_request:
+        - expressions: [...]
+          actions: [...]
+```
+
+FORBIDDEN (never use these):
+- version: "3" → use version: 3
+- type: http → INVALID FIELD
+- internal: true → use bindings: ["internal"]
+- tunnels: → v2 deprecated
+
+If unsure, say "I don't have documentation for that" instead of guessing."""
+
+        user_prompt = f"Generate an ngrok YAML configuration for: {request}"
+        if doc_context:
+            user_prompt += f"\n\nRelevant documentation:\n{doc_context}"
+        
+        response = await client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            temperature=0.2,
+            max_tokens=1500
         )
         
         return response.choices[0].message.content
