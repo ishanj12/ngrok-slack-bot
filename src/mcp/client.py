@@ -265,7 +265,7 @@ class NgrokMCPClient:
             "code_example": code_example
         }
     
-    async def ask(self, question: str, max_results: int = 8) -> str:
+    async def ask(self, question: str, max_results: int = 8, thread_context: str = "") -> str:
         """
         Ask a question and get a synthesized answer from the documentation.
         Uses LLM to generate a concise response from search results.
@@ -290,7 +290,7 @@ class NgrokMCPClient:
         
         # Synthesize with LLM if available
         if HAS_OPENAI and os.environ.get("OPENAI_API_KEY"):
-            return await self._synthesize_answer(question, context, results)
+            return await self._synthesize_answer(question, context, results, thread_context=thread_context)
         else:
             # Fallback: return best result with code example
             best = results[0]
@@ -302,7 +302,7 @@ class NgrokMCPClient:
                 answer += f"\n\n🔗 {best['link']}"
             return answer
     
-    async def _synthesize_answer(self, question: str, context: str, results: list[dict]) -> str:
+    async def _synthesize_answer(self, question: str, context: str, results: list[dict], thread_context: str = "") -> str:
         """Use OpenAI to synthesize a concise answer from search results."""
         client = AsyncOpenAI()
         
@@ -316,11 +316,15 @@ RULES:
 - If context lacks answer: "I don't have docs for that. Check https://ngrok.com/docs"
 """
 
+        user_content = f"Question: {question}\n\nDocumentation Context:\n{context}"
+        if thread_context:
+            user_content = f"Prior conversation in thread:\n{thread_context}\n\nFollow-up question: {question}\n\nDocumentation Context:\n{context}"
+
         response = await client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"Question: {question}\n\nDocumentation Context:\n{context}"}
+                {"role": "user", "content": user_content}
             ],
             temperature=0.3,
             max_tokens=1000

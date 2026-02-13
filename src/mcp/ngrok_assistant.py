@@ -149,18 +149,18 @@ def get_assistant() -> NgrokAssistant:
     return _assistant
 
 
-def ask_ngrok(query: str) -> str:
+def ask_ngrok(query: str, thread_context: str = "") -> str:
     """Sync wrapper to ask a question and get a synthesized answer."""
     try:
-        return run_in_background(_ask_ngrok_async(query))
+        return run_in_background(_ask_ngrok_async(query, thread_context))
     except Exception as e:
         return f"Error: {e}"
 
 
-async def _ask_ngrok_async(query: str) -> str:
+async def _ask_ngrok_async(query: str, thread_context: str = "") -> str:
     """Async implementation of ask_ngrok."""
     client = await NgrokMCPClient.connect()
-    return await client.ask(query)
+    return await client.ask(query, thread_context=thread_context)
 
 
 def generate_ngrok_yaml(request: str) -> str:
