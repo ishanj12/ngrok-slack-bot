@@ -12,17 +12,18 @@ app = App(
 
 
 @app.event("app_mention")
-def handle_app_mention(event, say, logger):
+def handle_app_mention(event, say, client, logger):
     """Handle when the bot is mentioned in a channel"""
     from src.bot.handlers import handle_mention
-    handle_mention(event, say, logger)
+    handle_mention(event, say, client, logger)
 
 
 @app.event("message")
-def handle_message_events(event, say, logger):
-    """Handle direct messages to the bot"""
+def handle_message_events(event, say, client, logger):
+    """Handle direct messages and threaded replies to the bot"""
+    print(f"DEBUG message event: {event}")
     from src.bot.handlers import handle_dm
-    handle_dm(event, say, logger)
+    handle_dm(event, say, client, logger)
 
 
 @app.command("/ngrok-help")

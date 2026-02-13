@@ -11,27 +11,29 @@ except ImportError:
     HAS_OPENAI = False
 
 
-def _ask_and_respond(query: str, say, logger, thread_ts: str | None = None, searching_msg: str = "🔍 Searching ngrok documentation...") -> None:
+def _ask_and_respond(query: str, say, logger, thread_ts: str | None = None, searching_msg: str = "🔍 Searching ngrok documentation...", channel: str | None = None, thread_context: str = "") -> None:
     """Common helper for asking ngrok and responding in Slack."""
     say(text=searching_msg, thread_ts=thread_ts)
     
-    answer = ask_ngrok(query)
+    answer = ask_ngrok(query, thread_context=thread_context)
     
     if answer and not answer.startswith("Error"):
         blocks = format_answer_for_slack(answer)
-        blocks.append({"type": "divider"})
-        blocks.append({
-            "type": "actions",
-            "elements": [
-                {
-                    "type": "button",
-                    "text": {"type": "plain_text", "text": "🎫 Create Support Ticket"},
-                    "style": "primary",
-                    "action_id": "create_ticket_from_conversation",
-                    "value": json.dumps({"question": query[:500], "answer": answer[:1000]})
-                }
-            ]
-        })
+        if not thread_context:
+            blocks.append({"type": "divider"})
+            button_data = {"channel": channel or "", "thread_ts": thread_ts or ""}
+            blocks.append({
+                "type": "actions",
+                "elements": [
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "🎫 Create Support Ticket"},
+                        "style": "primary",
+                        "action_id": "create_ticket_from_conversation",
+                        "value": json.dumps(button_data)
+                    }
+                ]
+            })
         say(text=answer[:200], blocks=blocks, thread_ts=thread_ts)
     else:
         logger.error(f"MCP error: {answer}")
@@ -79,7 +81,7 @@ def format_answer_for_slack(answer: str) -> list[dict]:
     return blocks
 
 
-def handle_mention(event, say, logger):
+def handle_mention(event, say, client, logger):
     """Handle when bot is mentioned"""
     try:
         user = event.get("user")
@@ -103,7 +105,13 @@ def handle_mention(event, say, logger):
             return
         
         logger.info(f"Question: {query}")
-        _ask_and_respond(query, say, logger, thread_ts=event.get("ts"))
+        
+        thread_context = ""
+        thread_ts = event.get("thread_ts")
+        if thread_ts and thread_ts != event.get("ts"):
+            thread_context = fetch_thread_messages(client, event["channel"], thread_ts, logger)
+        
+        _ask_and_respond(query, say, logger, thread_ts=thread_ts or event.get("ts"), channel=event.get("channel"), thread_context=thread_context)
     
     except Exception as e:
         logger.error(f"Error handling mention: {e}")
@@ -113,13 +121,36 @@ def handle_mention(event, say, logger):
         )
 
 
-def handle_dm(event, say, logger):
-    """Handle direct messages"""
-    if event.get("channel_type") != "im":
-        return
+def handle_dm(event, say, client, logger):
+    """Handle direct messages and threaded replies to the bot"""
+    logger.info(f"Message event received: channel_type={event.get('channel_type')}, thread_ts={event.get('thread_ts')}, ts={event.get('ts')}, subtype={event.get('subtype')}, text={event.get('text', '')[:50]}")
     
     if event.get("subtype") is not None:
         return
+    
+    is_dm = event.get("channel_type") == "im"
+    is_thread_reply = event.get("thread_ts") is not None and event.get("thread_ts") != event.get("ts")
+    
+    if not is_dm and not is_thread_reply:
+        return
+    
+    # For thread replies in channels, only respond if the bot participated in the thread
+    if is_thread_reply and not is_dm:
+        try:
+            result = client.conversations_replies(
+                channel=event["channel"], ts=event["thread_ts"], limit=50
+            )
+            bot_info = client.auth_test()
+            bot_user_id = bot_info["user_id"]
+            bot_in_thread = any(
+                msg.get("user") == bot_user_id or msg.get("bot_id")
+                for msg in result.get("messages", [])
+            )
+            if not bot_in_thread:
+                return
+        except Exception as e:
+            logger.error(f"Error checking thread participation: {e}")
+            return
     
     try:
         text = event.get("text", "").strip()
@@ -128,7 +159,13 @@ def handle_dm(event, say, logger):
             return
         
         logger.info(f"DM Question: {text}")
-        _ask_and_respond(text, say, logger)
+        
+        thread_context = ""
+        thread_ts = event.get("thread_ts")
+        if thread_ts and thread_ts != event.get("ts"):
+            thread_context = fetch_thread_messages(client, event["channel"], thread_ts, logger)
+        
+        _ask_and_respond(text, say, logger, thread_ts=thread_ts, channel=event.get("channel"), thread_context=thread_context)
     
     except Exception as e:
         logger.error(f"Error handling DM: {e}")
@@ -342,12 +379,33 @@ def handle_ticket_submission(ack, body, client, view, logger):
         )
 
 
-def synthesize_ticket_content(question: str, answer: str) -> dict:
-    """Use OpenAI to synthesize a ticket subject and description from conversation."""
+def fetch_thread_messages(client, channel: str, thread_ts: str, logger) -> str:
+    """Fetch all messages in a Slack thread and return as formatted context."""
+    try:
+        result = client.conversations_replies(channel=channel, ts=thread_ts, limit=50)
+        messages = result.get("messages", [])
+        
+        thread_text = []
+        for msg in messages:
+            user = msg.get("user", "unknown")
+            text = msg.get("text", "")
+            if msg.get("bot_id"):
+                thread_text.append(f"Bot: {text}")
+            else:
+                thread_text.append(f"User ({user}): {text}")
+        
+        return "\n\n".join(thread_text)
+    except Exception as e:
+        logger.error(f"Error fetching thread messages: {e}")
+        return ""
+
+
+def synthesize_ticket_content(thread_context: str) -> dict:
+    """Use OpenAI to synthesize a ticket subject and description from thread messages."""
     if not HAS_OPENAI or not os.environ.get("OPENAI_API_KEY"):
         return {
-            "subject": question[:100],
-            "description": f"Original question:\n{question}\n\nBot response:\n{answer}"
+            "subject": thread_context[:100],
+            "description": thread_context[:3000]
         }
     
     client = OpenAI()
@@ -357,9 +415,9 @@ def synthesize_ticket_content(question: str, answer: str) -> dict:
         messages=[
             {
                 "role": "system",
-                "content": """You synthesize support ticket content from user conversations with an ngrok documentation bot.
+                "content": """You synthesize support ticket content from a Slack thread conversation between a user and an ngrok documentation bot.
 
-Given the user's question and the bot's answer, create:
+Given the full thread, create:
 1. A concise ticket subject (max 100 chars) that captures the user's core issue
 2. A clear description that explains what the user needs help with
 
@@ -368,12 +426,13 @@ Respond in JSON format:
 
 The description should:
 - Summarize what the user was trying to accomplish
+- Reference key details from the conversation
 - Note what information the bot provided
 - Indicate why additional support may be needed"""
             },
             {
                 "role": "user",
-                "content": f"User question: {question}\n\nBot answer: {answer}"
+                "content": f"Slack thread conversation:\n\n{thread_context}"
             }
         ],
         temperature=0.3,
@@ -388,8 +447,8 @@ The description should:
         return json.loads(content)
     except (json.JSONDecodeError, IndexError):
         return {
-            "subject": question[:100],
-            "description": f"Original question:\n{question}\n\nBot response:\n{answer}"
+            "subject": thread_context[:100],
+            "description": thread_context[:3000]
         }
 
 
@@ -399,11 +458,18 @@ def handle_create_ticket_button(ack, body, client, logger):
     
     try:
         action = body["actions"][0]
-        conversation_data = json.loads(action["value"])
-        question = conversation_data.get("question", "")
-        answer = conversation_data.get("answer", "")
+        button_data = json.loads(action["value"])
+        channel = button_data.get("channel", "")
+        thread_ts = button_data.get("thread_ts", "")
         
-        ticket_content = synthesize_ticket_content(question, answer)
+        thread_context = ""
+        if channel and thread_ts:
+            thread_context = fetch_thread_messages(client, channel, thread_ts, logger)
+        
+        ticket_content = synthesize_ticket_content(thread_context) if thread_context else {
+            "subject": "",
+            "description": ""
+        }
         
         client.views_open(
             trigger_id=body["trigger_id"],
