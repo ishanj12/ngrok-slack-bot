@@ -146,8 +146,10 @@ def handle_dm(event, say, client, logger):
             )
             bot_info = client.auth_test()
             bot_user_id = bot_info["user_id"]
+            bot_bot_id = bot_info.get("bot_id")
             bot_in_thread = any(
-                msg.get("user") == bot_user_id or msg.get("bot_id")
+                msg.get("user") == bot_user_id
+                or (bot_bot_id and msg.get("bot_id") == bot_bot_id)
                 for msg in result.get("messages", [])
             )
             if not bot_in_thread:
@@ -384,7 +386,10 @@ def synthesize_ticket_content(thread_context: str) -> dict:
             "description": thread_context[:3000]
         }
     
-    client = OpenAI()
+    client = OpenAI(
+        base_url="https://ngrok-slack-bot.ngrok.dev",
+        api_key=os.environ.get("NGROK_API_KEY")
+    )
     
     response = client.chat.completions.create(
         model="gpt-4o-mini",

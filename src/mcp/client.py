@@ -361,7 +361,10 @@ class NgrokMCPClient:
             return answer
 
     async def _synthesize_answer(self, question: str, doc_context: str, category: str, thread_context: str = "") -> str:
-        client = AsyncOpenAI()
+        client = AsyncOpenAI(
+            base_url="https://ngrok-slack-bot.ngrok.dev",
+            api_key=os.environ.get("NGROK_API_KEY")
+        )
 
         context_instruction = self._format_context_instruction(category)
 
@@ -384,12 +387,12 @@ RULES:
             user_content = f"Prior conversation in thread:\n{thread_context}\n\nFollow-up question: {question}\n\nDocumentation Context:\n{doc_context}"
 
         response = await client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-4o",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_content}
             ],
-            temperature=0.3,
+            temperature=0.1,
             max_tokens=1000
         )
 
