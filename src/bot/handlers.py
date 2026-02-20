@@ -128,6 +128,10 @@ def handle_dm(event, say, client, logger):
     if event.get("subtype") is not None:
         return
     
+    text = event.get("text", "")
+    if re.match(r'<@\w+>', text):
+        return
+    
     is_dm = event.get("channel_type") == "im"
     is_thread_reply = event.get("thread_ts") is not None and event.get("thread_ts") != event.get("ts")
     
