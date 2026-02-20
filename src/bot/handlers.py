@@ -272,54 +272,7 @@ def handle_ticket_command(ack, command, client, logger):
         user_email = _get_user_email(client, command["user_id"], logger)
         client.views_open(
             trigger_id=command["trigger_id"],
-            view={
-                "type": "modal",
-                "callback_id": "ticket_submission",
-                "title": {"type": "plain_text", "text": "Create Support Ticket"},
-                "submit": {"type": "plain_text", "text": "Submit Ticket"},
-                "close": {"type": "plain_text", "text": "Cancel"},
-                "blocks": [
-                    {
-                        "type": "input",
-                        "block_id": "subject_block",
-                        "element": {
-                            "type": "plain_text_input",
-                            "action_id": "subject",
-                            "placeholder": {"type": "plain_text", "text": "Brief description of your issue"}
-                        },
-                        "label": {"type": "plain_text", "text": "Subject"}
-                    },
-                    {
-                        "type": "input",
-                        "block_id": "description_block",
-                        "element": {
-                            "type": "plain_text_input",
-                            "action_id": "description",
-                            "multiline": True,
-                            "placeholder": {"type": "plain_text", "text": "Describe your issue in detail..."}
-                        },
-                        "label": {"type": "plain_text", "text": "Description"}
-                    },
-                    _build_email_block(user_email),
-                    {
-                        "type": "input",
-                        "block_id": "priority_block",
-                        "element": {
-                            "type": "static_select",
-                            "action_id": "priority",
-                            "placeholder": {"type": "plain_text", "text": "Select priority"},
-                            "options": [
-                                {"text": {"type": "plain_text", "text": "Low"}, "value": "low"},
-                                {"text": {"type": "plain_text", "text": "Normal"}, "value": "normal"},
-                                {"text": {"type": "plain_text", "text": "High"}, "value": "high"},
-                                {"text": {"type": "plain_text", "text": "Urgent"}, "value": "urgent"}
-                            ],
-                            "initial_option": {"text": {"type": "plain_text", "text": "Normal"}, "value": "normal"}
-                        },
-                        "label": {"type": "plain_text", "text": "Priority"}
-                    }
-                ]
-            }
+            view=_build_ticket_modal(email=user_email)
         )
     except Exception as e:
         logger.error(f"Error opening ticket modal: {e}")
@@ -471,93 +424,110 @@ The description should:
         }
 
 
+def _build_ticket_modal(subject: str = "", description: str = "", email: str = "", loading: bool = False) -> dict:
+    """Build the ticket submission modal view."""
+    blocks = []
+    if loading:
+        blocks.append({
+            "type": "context",
+            "elements": [{"type": "mrkdwn", "text": "⏳ *Loading conversation context...*"}]
+        })
+    elif subject or description:
+        blocks.append({
+            "type": "context",
+            "elements": [{"type": "mrkdwn", "text": "📝 *Pre-filled from your conversation.* Feel free to edit."}]
+        })
+
+    blocks.extend([
+        {
+            "type": "input",
+            "block_id": "subject_block",
+            "element": {
+                "type": "plain_text_input",
+                "action_id": "subject",
+                **({"initial_value": subject[:150]} if subject else {}),
+                "placeholder": {"type": "plain_text", "text": "Brief description of your issue"}
+            },
+            "label": {"type": "plain_text", "text": "Subject"}
+        },
+        {
+            "type": "input",
+            "block_id": "description_block",
+            "element": {
+                "type": "plain_text_input",
+                "action_id": "description",
+                "multiline": True,
+                **({"initial_value": description[:3000]} if description else {}),
+                "placeholder": {"type": "plain_text", "text": "Describe your issue in detail..."}
+            },
+            "label": {"type": "plain_text", "text": "Description"}
+        },
+        _build_email_block(email),
+        {
+            "type": "input",
+            "block_id": "priority_block",
+            "element": {
+                "type": "static_select",
+                "action_id": "priority",
+                "placeholder": {"type": "plain_text", "text": "Select priority"},
+                "options": [
+                    {"text": {"type": "plain_text", "text": "Low"}, "value": "low"},
+                    {"text": {"type": "plain_text", "text": "Normal"}, "value": "normal"},
+                    {"text": {"type": "plain_text", "text": "High"}, "value": "high"},
+                    {"text": {"type": "plain_text", "text": "Urgent"}, "value": "urgent"}
+                ],
+                "initial_option": {"text": {"type": "plain_text", "text": "Normal"}, "value": "normal"}
+            },
+            "label": {"type": "plain_text", "text": "Priority"}
+        }
+    ])
+
+    return {
+        "type": "modal",
+        "callback_id": "ticket_submission",
+        "title": {"type": "plain_text", "text": "Create Support Ticket"},
+        "submit": {"type": "plain_text", "text": "Submit Ticket"},
+        "close": {"type": "plain_text", "text": "Cancel"},
+        "blocks": blocks
+    }
+
+
 def handle_create_ticket_button(ack, body, client, logger):
     """Handle the 'Create Support Ticket' button click from conversation."""
     ack()
     
+    user_id = body["user"]["id"]
+    
     try:
+        user_email = _get_user_email(client, user_id, logger)
+
+        result = client.views_open(
+            trigger_id=body["trigger_id"],
+            view=_build_ticket_modal(email=user_email, loading=True)
+        )
+        view_id = result["view"]["id"]
+
         action = body["actions"][0]
         button_data = json.loads(action["value"])
         channel = button_data.get("channel", "")
         thread_ts = button_data.get("thread_ts", "")
-        user_id = body["user"]["id"]
-        
-        user_email = _get_user_email(client, user_id, logger)
         
         thread_context = ""
         if channel and thread_ts:
             thread_context = fetch_thread_messages(client, channel, thread_ts, logger)
         
-        ticket_content = synthesize_ticket_content(thread_context) if thread_context else {
-            "subject": "",
-            "description": ""
-        }
-        
-        client.views_open(
-            trigger_id=body["trigger_id"],
-            view={
-                "type": "modal",
-                "callback_id": "ticket_submission",
-                "title": {"type": "plain_text", "text": "Create Support Ticket"},
-                "submit": {"type": "plain_text", "text": "Submit Ticket"},
-                "close": {"type": "plain_text", "text": "Cancel"},
-                "blocks": [
-                    {
-                        "type": "context",
-                        "elements": [
-                            {
-                                "type": "mrkdwn",
-                                "text": "📝 *Pre-filled from your conversation.* Feel free to edit."
-                            }
-                        ]
-                    },
-                    {
-                        "type": "input",
-                        "block_id": "subject_block",
-                        "element": {
-                            "type": "plain_text_input",
-                            "action_id": "subject",
-                            "initial_value": ticket_content.get("subject", "")[:150],
-                            "placeholder": {"type": "plain_text", "text": "Brief description of your issue"}
-                        },
-                        "label": {"type": "plain_text", "text": "Subject"}
-                    },
-                    {
-                        "type": "input",
-                        "block_id": "description_block",
-                        "element": {
-                            "type": "plain_text_input",
-                            "action_id": "description",
-                            "multiline": True,
-                            "initial_value": ticket_content.get("description", "")[:3000],
-                            "placeholder": {"type": "plain_text", "text": "Describe your issue in detail..."}
-                        },
-                        "label": {"type": "plain_text", "text": "Description"}
-                    },
-                    _build_email_block(user_email),
-                    {
-                        "type": "input",
-                        "block_id": "priority_block",
-                        "element": {
-                            "type": "static_select",
-                            "action_id": "priority",
-                            "placeholder": {"type": "plain_text", "text": "Select priority"},
-                            "options": [
-                                {"text": {"type": "plain_text", "text": "Low"}, "value": "low"},
-                                {"text": {"type": "plain_text", "text": "Normal"}, "value": "normal"},
-                                {"text": {"type": "plain_text", "text": "High"}, "value": "high"},
-                                {"text": {"type": "plain_text", "text": "Urgent"}, "value": "urgent"}
-                            ],
-                            "initial_option": {"text": {"type": "plain_text", "text": "Normal"}, "value": "normal"}
-                        },
-                        "label": {"type": "plain_text", "text": "Priority"}
-                    }
-                ]
-            }
+        ticket_content = synthesize_ticket_content(thread_context) if thread_context else {}
+
+        client.views_update(
+            view_id=view_id,
+            view=_build_ticket_modal(
+                subject=ticket_content.get("subject", ""),
+                description=ticket_content.get("description", ""),
+                email=user_email,
+            )
         )
     except Exception as e:
         logger.error(f"Error opening ticket modal from button: {e}")
-        user_id = body["user"]["id"]
         client.chat_postMessage(
             channel=user_id,
             text=f"❌ Sorry, there was an error opening the ticket form: {str(e)}"
