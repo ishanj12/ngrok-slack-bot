@@ -254,11 +254,22 @@ def handle_yaml(ack, command, say, logger):
         say(text=f"Sorry, I encountered an error: {str(e)}")
 
 
+def _get_user_email(client, user_id: str, logger) -> str:
+    """Fetch a Slack user's email from their profile."""
+    try:
+        user_info = client.users_info(user=user_id)
+        return user_info["user"].get("profile", {}).get("email", "")
+    except Exception as e:
+        logger.error(f"Error fetching user email: {e}")
+        return ""
+
+
 def handle_ticket_command(ack, command, client, logger):
     """Handle /ngrok-ticket command - opens a modal to create a support ticket"""
     ack()
     
     try:
+        user_email = _get_user_email(client, command["user_id"], logger)
         client.views_open(
             trigger_id=command["trigger_id"],
             view={
@@ -289,16 +300,7 @@ def handle_ticket_command(ack, command, client, logger):
                         },
                         "label": {"type": "plain_text", "text": "Description"}
                     },
-                    {
-                        "type": "input",
-                        "block_id": "email_block",
-                        "element": {
-                            "type": "plain_text_input",
-                            "action_id": "email",
-                            "placeholder": {"type": "plain_text", "text": "your.email@company.com"}
-                        },
-                        "label": {"type": "plain_text", "text": "Your Email"}
-                    },
+                    _build_email_block(user_email),
                     {
                         "type": "input",
                         "block_id": "priority_block",
@@ -321,6 +323,23 @@ def handle_ticket_command(ack, command, client, logger):
         )
     except Exception as e:
         logger.error(f"Error opening ticket modal: {e}")
+
+
+def _build_email_block(email: str = "") -> dict:
+    """Build the email input block, pre-filled if email is available."""
+    element = {
+        "type": "plain_text_input",
+        "action_id": "email",
+        "placeholder": {"type": "plain_text", "text": "your.email@company.com"}
+    }
+    if email:
+        element["initial_value"] = email
+    return {
+        "type": "input",
+        "block_id": "email_block",
+        "element": element,
+        "label": {"type": "plain_text", "text": "Your Email"}
+    }
 
 
 def handle_ticket_submission(ack, body, client, view, logger):
@@ -461,6 +480,9 @@ def handle_create_ticket_button(ack, body, client, logger):
         button_data = json.loads(action["value"])
         channel = button_data.get("channel", "")
         thread_ts = button_data.get("thread_ts", "")
+        user_id = body["user"]["id"]
+        
+        user_email = _get_user_email(client, user_id, logger)
         
         thread_context = ""
         if channel and thread_ts:
@@ -512,16 +534,7 @@ def handle_create_ticket_button(ack, body, client, logger):
                         },
                         "label": {"type": "plain_text", "text": "Description"}
                     },
-                    {
-                        "type": "input",
-                        "block_id": "email_block",
-                        "element": {
-                            "type": "plain_text_input",
-                            "action_id": "email",
-                            "placeholder": {"type": "plain_text", "text": "your.email@company.com"}
-                        },
-                        "label": {"type": "plain_text", "text": "Your Email"}
-                    },
+                    _build_email_block(user_email),
                     {
                         "type": "input",
                         "block_id": "priority_block",
