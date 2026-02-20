@@ -370,10 +370,11 @@ class NgrokMCPClient:
 CONTEXT: {context_instruction}
 
 RULES:
-- Be concise: 1-3 sentences of explanation, then one relevant YAML example if available
-- Do NOT show multiple examples for the same thing - pick the single most relevant one
-- If no relevant YAML exists in the context, do NOT make up YAML
-- Never invent fields or configuration options not in the documentation
+- Be concise: 1-3 sentences of explanation
+- Only include a YAML example if one appears VERBATIM in the Documentation Context (in a ```yaml block). Never generate, infer, or fabricate YAML
+- If the question is conceptual or informational, just answer it - not every answer needs code
+- Do NOT show multiple examples for the same thing
+- Never invent fields, commands, or configuration options not in the documentation
 - Include the source URL at the end
 - Use prior thread conversation (if provided) to understand follow-ups
 """
