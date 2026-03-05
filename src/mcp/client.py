@@ -3,6 +3,7 @@ MCP Client for ngrok documentation.
 Connects to ngrok's official MCP server at https://ngrok.com/docs/mcp via HTTP.
 """
 
+import difflib
 import json
 import os
 import re
@@ -252,66 +253,65 @@ class NgrokMCPClient:
                 break
         return results
 
-    TRAFFIC_POLICY_ACTIONS = {
-        "circuit breaking": "circuit-breaker",
-        "circuitbreaking": "circuit-breaker",
-        "circuit breaker": "circuit-breaker",
-        "circuitbreaker": "circuit-breaker",
-        "circuit-breaker": "circuit-breaker",
-        "rate limit": "rate-limit",
-        "ratelimit": "rate-limit",
-        "rate-limit": "rate-limit",
-        "rate limiting": "rate-limit",
-        "ratelimiting": "rate-limit",
-        "rate-limiting": "rate-limit",
-        "jwt validation": "jwt-validation",
-        "jwt": "jwt-validation",
-        "basic auth": "basic-auth",
-        "basicauth": "basic-auth",
-        "oauth": "oauth",
-        "oidc": "openid-connect",
-        "openid connect": "openid-connect",
-        "openid": "openid-connect",
-        "restrict ip": "restrict-ips",
-        "restrict-ips": "restrict-ips",
-        "ip restriction": "restrict-ips",
-        "ip restrict": "restrict-ips",
-        "url rewrite": "url-rewrite",
-        "url rewrites": "url-rewrite",
-        "url-rewrite": "url-rewrite",
-        "add header": "add-headers",
-        "add headers": "add-headers",
-        "add-headers": "add-headers",
-        "remove header": "remove-headers",
-        "remove headers": "remove-headers",
-        "remove-headers": "remove-headers",
-        "custom response": "custom-response",
-        "custom-response": "custom-response",
-        "compress response": "compress-response",
-        "compress-response": "compress-response",
-        "redirect": "redirect",
-        "deny": "deny",
-        "forward internal": "forward-internal",
-        "forward-internal": "forward-internal",
-        "verify webhook": "verify-webhook",
-        "verify-webhook": "verify-webhook",
-        "webhook verification": "verify-webhook",
-        "close connection": "close-connection",
-        "close-connection": "close-connection",
-        "terminate tls": "terminate-tls",
-        "terminate-tls": "terminate-tls",
-        "tls termination": "terminate-tls",
-        "log": "log",
-        "ai gateway": "ai-gateway",
-        "ai-gateway": "ai-gateway",
+    TRAFFIC_POLICY_ACTIONS: dict[str, list[str]] = {
+        "circuit-breaker": ["circuit breaker", "circuit breaking"],
+        "rate-limit": ["rate limit", "rate limiting"],
+        "jwt-validation": ["jwt validation", "jwt"],
+        "basic-auth": ["basic auth", "basic authentication"],
+        "oauth": ["oauth"],
+        "openid-connect": ["openid connect", "openid", "oidc"],
+        "restrict-ips": ["restrict ips", "ip restriction", "ip restrict"],
+        "url-rewrite": ["url rewrite", "url rewrites"],
+        "add-headers": ["add headers", "add header"],
+        "remove-headers": ["remove headers", "remove header"],
+        "custom-response": ["custom response"],
+        "compress-response": ["compress response", "compression"],
+        "redirect": ["redirect", "redirects"],
+        "deny": ["deny"],
+        "forward-internal": ["forward internal"],
+        "verify-webhook": ["verify webhook", "webhook verification"],
+        "close-connection": ["close connection"],
+        "terminate-tls": ["terminate tls", "tls termination"],
+        "log": ["log", "logging"],
+        "ai-gateway": ["ai gateway"],
     }
+
+    _FUZZY_THRESHOLD = 0.75
+    _SHORT_EXACT_MAX_LEN = 5
 
     def _detect_action_slug(self, query: str) -> str | None:
         q_lower = query.lower()
-        for phrase, slug in sorted(self.TRAFFIC_POLICY_ACTIONS.items(), key=lambda x: -len(x[0])):
-            if phrase in q_lower:
-                return slug
-        return None
+
+        for slug, aliases in self.TRAFFIC_POLICY_ACTIONS.items():
+            for alias in [slug] + aliases:
+                if alias in q_lower:
+                    return slug
+
+        words = re.findall(r'[a-z0-9]+', q_lower)
+        candidates: list[str] = []
+        for n in range(1, 4):
+            for i in range(len(words) - n + 1):
+                candidates.append(" ".join(words[i:i + n]))
+        for n in range(2, 4):
+            for i in range(len(words) - n + 1):
+                candidates.append("".join(words[i:i + n]))
+
+        best_score = 0.0
+        best_slug: str | None = None
+
+        for candidate in candidates:
+            if len(candidate) < 3:
+                continue
+            for slug, aliases in self.TRAFFIC_POLICY_ACTIONS.items():
+                for alias in [slug] + aliases:
+                    if len(alias) <= self._SHORT_EXACT_MAX_LEN:
+                        continue
+                    ratio = difflib.SequenceMatcher(None, candidate, alias).ratio()
+                    if ratio > best_score and ratio >= self._FUZZY_THRESHOLD:
+                        best_score = ratio
+                        best_slug = slug
+
+        return best_slug
 
     def _build_search_queries(self, query: str, wants_k8s: bool = False) -> list[str]:
         keywords = self._extract_keywords(query)
