@@ -21,9 +21,10 @@ build/
 *.swp
 *.swo
 
-# Data (large files)
+# Data (large files, user preferences)
 data/vectorstore/
 data/raw/
+data/model_prefs.json
 
 # ngrok-mcp (cloned separately)
 ngrok-mcp/

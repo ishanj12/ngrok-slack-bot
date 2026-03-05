@@ -108,14 +108,14 @@ def handle_mention(event, say, client, logger):
             )
             return
         
-        logger.info(f"Question: {query}")
+        model = get_user_model(user)
+        logger.info(f"Question from {user} (model={model}): {query}")
         
         thread_context = ""
         thread_ts = event.get("thread_ts")
         if thread_ts and thread_ts != event.get("ts"):
             thread_context = fetch_thread_messages(client, event["channel"], thread_ts, logger)
         
-        model = get_user_model(user)
         _ask_and_respond(query, say, logger, thread_ts=thread_ts or event.get("ts"), channel=event.get("channel"), thread_context=thread_context, model=model)
     
     except Exception as e:
@@ -169,15 +169,14 @@ def handle_dm(event, say, client, logger):
         if not text:
             return
         
-        logger.info(f"DM Question: {text}")
+        user_id = event.get("user")
+        model = get_user_model(user_id) if user_id else None
+        logger.info(f"DM from {user_id} (model={model}): {text}")
         
         thread_context = ""
         thread_ts = event.get("thread_ts")
         if thread_ts and thread_ts != event.get("ts"):
             thread_context = fetch_thread_messages(client, event["channel"], thread_ts, logger)
-        
-        user_id = event.get("user")
-        model = get_user_model(user_id) if user_id else None
         _ask_and_respond(text, say, logger, thread_ts=thread_ts, channel=event.get("channel"), thread_context=thread_context, model=model)
     
     except Exception as e:
