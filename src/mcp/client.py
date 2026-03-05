@@ -447,7 +447,12 @@ CONTEXT: {context_instruction}
 
 RULES:
 - Be concise: 1-3 sentences of explanation
-- Only include a YAML example if one appears VERBATIM in the Documentation Context (in a ```yaml block). Never generate, infer, or fabricate YAML
+- YAML RULES (CRITICAL):
+  - Only include YAML if a ```yaml block appears VERBATIM in the Documentation Context
+  - If you include YAML, copy it EXACTLY from the documentation - character for character
+  - NEVER modify, adapt, simplify, or reformat YAML from the documentation
+  - NEVER generate YAML from field descriptions, configuration tables, or prose
+  - If no verbatim YAML block exists in the context, do NOT include any YAML - just explain the feature and link to the docs
 - If the question is conceptual or informational, just answer it - not every answer needs code
 - Do NOT show multiple examples for the same thing
 - Never invent fields, commands, or configuration options not in the documentation
