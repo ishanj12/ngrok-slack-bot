@@ -174,11 +174,38 @@ class NgrokMCPClient:
                 break
         return results
 
+    TRAFFIC_POLICY_ACTIONS = {
+        "circuit breaking", "circuit breaker", "rate limit", "rate limiting",
+        "jwt validation", "jwt", "basic auth", "oauth", "oidc", "openid",
+        "restrict ip", "ip restriction", "url rewrite", "url rewrites",
+        "add header", "add headers", "remove header", "remove headers",
+        "custom response", "compress response", "redirect", "deny",
+        "forward internal", "verify webhook", "close connection",
+        "terminate tls", "log", "saml",
+    }
+
     def _build_search_queries(self, query: str) -> list[str]:
         keywords = self._extract_keywords(query)
         queries = [keywords]
         if keywords != query:
             queries.append(query)
+
+        keyword_list = keywords.split()
+        if len(keyword_list) >= 2:
+            hyphenated = "-".join(keyword_list)
+            queries.append(hyphenated)
+            queries.append(f"{hyphenated} action")
+
+        queries.append(f"{keywords} traffic policy action")
+
+        q_lower = query.lower()
+        for action in self.TRAFFIC_POLICY_ACTIONS:
+            if action in q_lower:
+                action_hyphenated = action.replace(" ", "-")
+                queries.append(f"{action_hyphenated} action")
+                queries.append(action_hyphenated)
+                break
+
         return queries
 
     def _is_k8s_doc(self, result: dict) -> bool:
