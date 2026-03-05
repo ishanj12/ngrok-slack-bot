@@ -126,13 +126,35 @@ class NgrokMCPClient:
         keywords = [w for w in words if w not in self.FILLER_WORDS and len(w) > 1]
         return " ".join(keywords)
 
+    async def _fetch_action_doc(self, slug: str) -> dict | None:
+        url = f"https://ngrok.com/docs/traffic-policy/actions/{slug}"
+        page = await self._fetch_doc_page(url)
+        if not page:
+            return None
+        yaml_blocks = self._extract_yaml_blocks(page)
+        return {
+            "title": f"{slug.replace('-', ' ').title()} Action",
+            "link": url,
+            "content": page[:500],
+            "full_content": page[:4000],
+            "yaml_examples": yaml_blocks,
+        }
+
     async def search_docs(self, query: str, max_results: int = 3) -> list[dict]:
         """Search ngrok docs with multi-query, k8s filtering, and page enrichment."""
         query_lower = query.lower()
         wants_k8s = any(kw in query_lower for kw in ["kubernetes", "k8s", "ingress", "operator", "crd", "helm"])
 
+        action_slug = self._detect_action_slug(query)
+        action_doc = None
+        if action_slug:
+            action_doc = await self._fetch_action_doc(action_slug)
+
         search_queries = self._build_search_queries(query)
         results = await self._run_search_queries(search_queries, max_results)
+
+        if action_doc:
+            results = [action_doc] + [r for r in results if r.get("link") != action_doc["link"]]
 
         if not wants_k8s:
             non_k8s = [r for r in results if not self._is_k8s_doc(r)]
@@ -175,14 +197,43 @@ class NgrokMCPClient:
         return results
 
     TRAFFIC_POLICY_ACTIONS = {
-        "circuit breaking", "circuit breaker", "rate limit", "rate limiting",
-        "jwt validation", "jwt", "basic auth", "oauth", "oidc", "openid",
-        "restrict ip", "ip restriction", "url rewrite", "url rewrites",
-        "add header", "add headers", "remove header", "remove headers",
-        "custom response", "compress response", "redirect", "deny",
-        "forward internal", "verify webhook", "close connection",
-        "terminate tls", "log", "saml",
+        "circuit breaking": "circuit-breaker",
+        "circuit breaker": "circuit-breaker",
+        "rate limit": "rate-limit",
+        "rate limiting": "rate-limit",
+        "jwt validation": "jwt-validation",
+        "jwt": "jwt-validation",
+        "basic auth": "basic-auth",
+        "oauth": "oauth",
+        "oidc": "openid-connect",
+        "openid connect": "openid-connect",
+        "openid": "openid-connect",
+        "restrict ip": "restrict-ips",
+        "ip restriction": "restrict-ips",
+        "url rewrite": "url-rewrite",
+        "url rewrites": "url-rewrite",
+        "add header": "add-headers",
+        "add headers": "add-headers",
+        "remove header": "remove-headers",
+        "remove headers": "remove-headers",
+        "custom response": "custom-response",
+        "compress response": "compress-response",
+        "redirect": "redirect",
+        "deny": "deny",
+        "forward internal": "forward-internal",
+        "verify webhook": "verify-webhook",
+        "close connection": "close-connection",
+        "terminate tls": "terminate-tls",
+        "log": "log",
+        "ai gateway": "ai-gateway",
     }
+
+    def _detect_action_slug(self, query: str) -> str | None:
+        q_lower = query.lower()
+        for phrase, slug in sorted(self.TRAFFIC_POLICY_ACTIONS.items(), key=lambda x: -len(x[0])):
+            if phrase in q_lower:
+                return slug
+        return None
 
     def _build_search_queries(self, query: str) -> list[str]:
         keywords = self._extract_keywords(query)
@@ -190,21 +241,13 @@ class NgrokMCPClient:
         if keywords != query:
             queries.append(query)
 
-        keyword_list = keywords.split()
-        if len(keyword_list) >= 2:
-            hyphenated = "-".join(keyword_list)
-            queries.append(hyphenated)
-            queries.append(f"{hyphenated} action")
+        slug = self._detect_action_slug(query)
+        if slug:
+            queries.append(f"{slug} action")
+            queries.append(slug)
+            queries.append(f"{slug} traffic policy")
 
         queries.append(f"{keywords} traffic policy action")
-
-        q_lower = query.lower()
-        for action in self.TRAFFIC_POLICY_ACTIONS:
-            if action in q_lower:
-                action_hyphenated = action.replace(" ", "-")
-                queries.append(f"{action_hyphenated} action")
-                queries.append(action_hyphenated)
-                break
 
         return queries
 
