@@ -19,6 +19,19 @@ try:
 except ImportError:
     HAS_OPENAI = False
 
+try:
+    from anthropic import AsyncAnthropic
+    HAS_ANTHROPIC = True
+except ImportError:
+    HAS_ANTHROPIC = False
+
+try:
+    from google import genai
+    from google.genai import types as genai_types
+    HAS_GEMINI = True
+except ImportError:
+    HAS_GEMINI = False
+
 NGROK_MCP_URL = "https://ngrok.com/docs/mcp"
 
 
@@ -343,16 +356,77 @@ class NgrokMCPClient:
             "even if they appear in the documentation context. The user did not ask about Kubernetes."
         )
 
+    # ── Provider detection ────────────────────────────────────────────────
+
+    def _get_provider(self, model: str) -> str:
+        if model.startswith("claude"):
+            return "anthropic"
+        if model.startswith("gemini"):
+            return "gemini"
+        return "openai"
+
+    def _has_any_llm(self) -> bool:
+        return (
+            (HAS_OPENAI and os.environ.get("OPENAI_API_KEY"))
+            or (HAS_ANTHROPIC and os.environ.get("ANTHROPIC_API_KEY"))
+            or (HAS_GEMINI and os.environ.get("GEMINI_API_KEY"))
+        )
+
+    async def _call_llm(self, system_prompt: str, user_content: str, model: str, temperature: float = 0.3, max_tokens: int = 1000) -> str:
+        provider = self._get_provider(model)
+
+        if provider == "anthropic":
+            if not HAS_ANTHROPIC or not os.environ.get("ANTHROPIC_API_KEY"):
+                return "Error: Anthropic API key required for Claude models."
+            client = AsyncAnthropic()
+            response = await client.messages.create(
+                model=model,
+                system=system_prompt,
+                messages=[{"role": "user", "content": user_content}],
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+            return response.content[0].text
+
+        if provider == "gemini":
+            if not HAS_GEMINI or not os.environ.get("GEMINI_API_KEY"):
+                return "Error: GEMINI_API_KEY required for Gemini models."
+            client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+            response = await client.aio.models.generate_content(
+                model=model,
+                contents=user_content,
+                config=genai_types.GenerateContentConfig(
+                    system_instruction=system_prompt,
+                    temperature=temperature,
+                    max_output_tokens=max_tokens,
+                ),
+            )
+            return response.text
+
+        if not HAS_OPENAI or not os.environ.get("OPENAI_API_KEY"):
+            return "Error: OpenAI API key required."
+        client = AsyncOpenAI()
+        response = await client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content},
+            ],
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+        return response.choices[0].message.content
+
     # ── Ask ────────────────────────────────────────────────────────────────
 
-    async def ask(self, question: str, max_results: int = 8, thread_context: str = "") -> str:
+    async def ask(self, question: str, max_results: int = 8, thread_context: str = "", model: str = "gpt-4o-mini") -> str:
         results = await self.search_docs(question, max_results=max_results)
         if not results:
             return "I couldn't find relevant documentation for your question."
         context = self._build_doc_context(results)
         category = self._classify_query(question)
-        if HAS_OPENAI and os.environ.get("OPENAI_API_KEY"):
-            return await self._synthesize_answer(question, context, category, thread_context=thread_context)
+        if self._has_any_llm():
+            return await self._synthesize_answer(question, context, category, thread_context=thread_context, model=model)
         else:
             best = results[0]
             answer = f"**{best.get('title', 'Answer')}**\n\n{best.get('content', '')[:500]}"
@@ -360,12 +434,7 @@ class NgrokMCPClient:
                 answer += f"\n\n🔗 {best['link']}"
             return answer
 
-    async def _synthesize_answer(self, question: str, doc_context: str, category: str, thread_context: str = "") -> str:
-        client = AsyncOpenAI(
-            base_url="https://ngrok-slack-bot.ngrok.dev",
-            api_key=os.environ.get("NGROK_API_KEY")
-        )
-
+    async def _synthesize_answer(self, question: str, doc_context: str, category: str, thread_context: str = "", model: str = "gpt-4o-mini") -> str:
         context_instruction = self._format_context_instruction(category)
 
         system_prompt = f"""You answer ngrok questions using ONLY the Documentation Context provided.
@@ -386,30 +455,18 @@ RULES:
         if thread_context:
             user_content = f"Prior conversation in thread:\n{thread_context}\n\nFollow-up question: {question}\n\nDocumentation Context:\n{doc_context}"
 
-        response = await client.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_content}
-            ],
-            temperature=0.1,
-            max_tokens=1000
-        )
-
-        return response.choices[0].message.content
+        return await self._call_llm(system_prompt, user_content, model, temperature=0.3, max_tokens=1000)
 
     # ── YAML generation ───────────────────────────────────────────────────
 
-    async def generate_yaml(self, request: str) -> str:
-        if not HAS_OPENAI or not os.environ.get("OPENAI_API_KEY"):
-            return "Error: OpenAI API key required for YAML generation."
+    async def generate_yaml(self, request: str, model: str = "gpt-4o") -> str:
+        if not self._has_any_llm():
+            return "Error: An LLM API key (OpenAI, Anthropic, or Gemini) is required for YAML generation."
 
         results = await self.search_docs(request, max_results=8)
         doc_context = self._build_doc_context(results)
         category = self._classify_query(request)
         context_instruction = self._format_context_instruction(category)
-
-        client = AsyncOpenAI()
 
         system_prompt = f"""You generate ngrok YAML configurations by adapting examples from the documentation provided below. Do not use any prior knowledge about ngrok.
 
@@ -425,14 +482,4 @@ RULES:
         if doc_context:
             user_prompt += f"\n\nRelevant documentation:\n{doc_context}"
 
-        response = await client.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
-            temperature=0.2,
-            max_tokens=1500
-        )
-
-        return response.choices[0].message.content
+        return await self._call_llm(system_prompt, user_prompt, model, temperature=0.2, max_tokens=1500)

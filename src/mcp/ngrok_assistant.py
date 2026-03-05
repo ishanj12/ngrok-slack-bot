@@ -149,29 +149,29 @@ def get_assistant() -> NgrokAssistant:
     return _assistant
 
 
-def ask_ngrok(query: str, thread_context: str = "") -> str:
+def ask_ngrok(query: str, thread_context: str = "", model: str = "gpt-4o-mini") -> str:
     """Sync wrapper to ask a question and get a synthesized answer."""
     try:
-        return run_in_background(_ask_ngrok_async(query, thread_context))
+        return run_in_background(_ask_ngrok_async(query, thread_context, model))
     except Exception as e:
         return f"Error: {e}"
 
 
-async def _ask_ngrok_async(query: str, thread_context: str = "") -> str:
+async def _ask_ngrok_async(query: str, thread_context: str = "", model: str = "gpt-4o-mini") -> str:
     """Async implementation of ask_ngrok."""
     client = await NgrokMCPClient.connect()
-    return await client.ask(query, thread_context=thread_context)
+    return await client.ask(query, thread_context=thread_context, model=model)
 
 
-def generate_ngrok_yaml(request: str) -> str:
+def generate_ngrok_yaml(request: str, model: str = "gpt-4o") -> str:
     """Sync wrapper to generate a custom ngrok YAML configuration."""
     try:
-        return run_in_background(_generate_yaml_async(request))
+        return run_in_background(_generate_yaml_async(request, model))
     except Exception as e:
         return f"Error: {e}"
 
 
-async def _generate_yaml_async(request: str) -> str:
+async def _generate_yaml_async(request: str, model: str = "gpt-4o") -> str:
     """Async implementation of generate_ngrok_yaml."""
     client = await NgrokMCPClient.connect()
-    return await client.generate_yaml(request)
+    return await client.generate_yaml(request, model=model)

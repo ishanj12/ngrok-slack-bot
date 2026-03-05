@@ -6,6 +6,8 @@ mcp>=1.0.0
 
 # LLM (for synthesized responses)
 openai
+anthropic
+google-genai
 
 # HTTP requests (for Zendesk API)
 requests

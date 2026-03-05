@@ -47,6 +47,20 @@ def handle_yaml_command(ack, command, say, logger):
     handle_yaml(ack, command, say, logger)
 
 
+@app.command("/ngrokbot-model")
+def handle_model_command(ack, command, client, logger):
+    """Handle /ngrok-model slash command - opens model selection modal"""
+    from src.bot.handlers import handle_model
+    handle_model(ack, command, client, logger)
+
+
+@app.view("model_selection")
+def handle_model_selection(ack, body, client, view, logger):
+    """Handle model selection modal submission"""
+    from src.bot.handlers import handle_model_submission
+    handle_model_submission(ack, body, client, view, logger)
+
+
 @app.command("/ngrok-ticket")
 def handle_ticket_command(ack, command, client, logger):
     """Handle /ngrok-ticket slash command - opens ticket creation modal"""

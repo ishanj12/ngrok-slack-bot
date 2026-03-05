@@ -2,6 +2,7 @@ import json
 import os
 import re
 
+from src.bot.models import get_available_models, get_user_model, set_user_model
 from src.mcp.ngrok_assistant import ask_ngrok, generate_ngrok_yaml
 
 try:
@@ -11,11 +12,14 @@ except ImportError:
     HAS_OPENAI = False
 
 
-def _ask_and_respond(query: str, say, logger, thread_ts: str | None = None, searching_msg: str = "🔍 Searching ngrok documentation...", channel: str | None = None, thread_context: str = "") -> None:
+def _ask_and_respond(query: str, say, logger, thread_ts: str | None = None, searching_msg: str = "🔍 Searching ngrok documentation...", channel: str | None = None, thread_context: str = "", model: str | None = None) -> None:
     """Common helper for asking ngrok and responding in Slack."""
     say(text=searching_msg, thread_ts=thread_ts)
     
-    answer = ask_ngrok(query, thread_context=thread_context)
+    kwargs = {"thread_context": thread_context}
+    if model is not None:
+        kwargs["model"] = model
+    answer = ask_ngrok(query, **kwargs)
     
     if answer and not answer.startswith("Error"):
         blocks = format_answer_for_slack(answer)
@@ -111,7 +115,8 @@ def handle_mention(event, say, client, logger):
         if thread_ts and thread_ts != event.get("ts"):
             thread_context = fetch_thread_messages(client, event["channel"], thread_ts, logger)
         
-        _ask_and_respond(query, say, logger, thread_ts=thread_ts or event.get("ts"), channel=event.get("channel"), thread_context=thread_context)
+        model = get_user_model(user)
+        _ask_and_respond(query, say, logger, thread_ts=thread_ts or event.get("ts"), channel=event.get("channel"), thread_context=thread_context, model=model)
     
     except Exception as e:
         logger.error(f"Error handling mention: {e}")
@@ -171,11 +176,78 @@ def handle_dm(event, say, client, logger):
         if thread_ts and thread_ts != event.get("ts"):
             thread_context = fetch_thread_messages(client, event["channel"], thread_ts, logger)
         
-        _ask_and_respond(text, say, logger, thread_ts=thread_ts, channel=event.get("channel"), thread_context=thread_context)
+        user_id = event.get("user")
+        model = get_user_model(user_id) if user_id else None
+        _ask_and_respond(text, say, logger, thread_ts=thread_ts, channel=event.get("channel"), thread_context=thread_context, model=model)
     
     except Exception as e:
         logger.error(f"Error handling DM: {e}")
         say(text=f"Sorry, I encountered an error: {str(e)}")
+
+
+def handle_model(ack, command, client, logger):
+    """Handle /ngrok-model command - opens model selection modal"""
+    ack()
+
+    user_id = command["user_id"]
+    current = get_user_model(user_id)
+    available = get_available_models()
+
+    options = [
+        {"text": {"type": "plain_text", "text": m["name"]}, "value": m["id"]}
+        for m in available
+    ]
+    initial_option = next(
+        (o for o in options if o["value"] == current), options[0]
+    )
+
+    try:
+        client.views_open(
+            trigger_id=command["trigger_id"],
+            view={
+                "type": "modal",
+                "callback_id": "model_selection",
+                "title": {"type": "plain_text", "text": "Select Model"},
+                "submit": {"type": "plain_text", "text": "Save"},
+                "close": {"type": "plain_text", "text": "Cancel"},
+                "blocks": [
+                    {
+                        "type": "section",
+                        "text": {"type": "mrkdwn", "text": f"Current model: *{current}*"}
+                    },
+                    {
+                        "type": "input",
+                        "block_id": "model_block",
+                        "label": {"type": "plain_text", "text": "Model"},
+                        "element": {
+                            "type": "static_select",
+                            "action_id": "model_select",
+                            "options": options,
+                            "initial_option": initial_option,
+                        },
+                    },
+                ],
+            },
+        )
+    except Exception as e:
+        logger.error(f"Error opening model modal: {e}")
+
+
+def handle_model_submission(ack, body, client, view, logger):
+    """Handle model selection modal submission"""
+    ack()
+
+    user_id = body["user"]["id"]
+    selected = view["state"]["values"]["model_block"]["model_select"]["selected_option"]["value"]
+    set_user_model(user_id, selected)
+
+    model_name = next(
+        (m["name"] for m in get_available_models() if m["id"] == selected), selected
+    )
+    client.chat_postMessage(
+        channel=user_id,
+        text=f"Model set to *{model_name}* (`{selected}`) for all your future queries."
+    )
 
 
 def handle_help(ack, command, say):
@@ -203,7 +275,7 @@ def handle_help(ack, command, say):
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": "*Available Commands:*\n\n• `/ngrok-ask <question>` - Ask a question about ngrok\n• `/ngrok-yaml <description>` - Get YAML configuration help\n• `/ngrok-ticket` - Create a support ticket\n• `/ngrok-help` - Show this help message"
+                    "text": "*Available Commands:*\n\n• `/ngrok-ask <question>` - Ask a question about ngrok\n• `/ngrok-yaml <description>` - Get YAML configuration help\n• `/ngrokbot-model` - Select your AI model\n• `/ngrok-ticket` - Create a support ticket\n• `/ngrok-help` - Show this help message"
                 }
             },
             {"type": "divider"},
@@ -229,7 +301,8 @@ def handle_ask(ack, command, say, logger):
         return
     
     try:
-        _ask_and_respond(question, say, logger, searching_msg=f"🔍 Searching for: _{question}_")
+        model = get_user_model(command["user_id"])
+        _ask_and_respond(question, say, logger, searching_msg=f"🔍 Searching for: _{question}_", model=model)
     except Exception as e:
         say(text=f"Sorry, I encountered an error: {str(e)}")
 
@@ -247,7 +320,8 @@ def handle_yaml(ack, command, say, logger):
     try:
         say(text=f"⚙️ Generating YAML configuration for: _{request}_")
         
-        result = generate_ngrok_yaml(request)
+        model = get_user_model(command["user_id"])
+        result = generate_ngrok_yaml(request, model=model)
         
         if result and not result.startswith("Error"):
             blocks = format_answer_for_slack(result)
