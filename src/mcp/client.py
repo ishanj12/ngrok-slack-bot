@@ -115,10 +115,7 @@ class NgrokMCPClient:
                     "should", "would", "could", "please", "show", "tell",
                     "about", "using", "use", "set", "up", "get", "make",
                     "protect", "secure", "configure", "setup", "create",
-                    "add", "enable", "implement", "apply", "want", "need",
-                    "endpoint", "endpoints", "tunnel", "tunnels",
-                    "service", "services", "server", "application", "app",
-                    "api", "request", "requests", "response", "connection"}
+                    "add", "enable", "implement", "apply", "want", "need"}
 
     def _extract_keywords(self, query: str) -> str:
         """Extract core topic keywords from a natural language question."""
@@ -140,6 +137,57 @@ class NgrokMCPClient:
             "yaml_examples": yaml_blocks,
         }
 
+    K8S_TOPIC_PAGES = {
+        "endpoint": "getting-started/kubernetes/endpoints",
+        "endpoints": "getting-started/kubernetes/endpoints",
+        "bound endpoint": "universal-gateway/kubernetes-endpoints",
+        "kubernetes endpoint": "getting-started/kubernetes/endpoints",
+        "agentendpoint": "k8s/crds/agentendpoint",
+        "agent endpoint": "k8s/crds/agentendpoint",
+        "cloudendpoint": "k8s/crds/cloudendpoint",
+        "cloud endpoint": "k8s/crds/cloudendpoint",
+        "crd": "k8s/guides/using-crds",
+        "crds": "k8s/guides/using-crds",
+        "custom resource": "k8s/guides/using-crds",
+        "ingress": "getting-started/kubernetes/ingress",
+        "gateway api": "getting-started/kubernetes/gateway-api",
+        "install": "k8s/installation",
+        "helm": "k8s/installation/helm",
+        "traffic policy": "k8s/guides/using-crds",
+    }
+
+    def _detect_k8s_topic_slugs(self, query: str) -> list[str]:
+        q_lower = query.lower()
+        slugs: list[str] = []
+        seen: set[str] = set()
+        for phrase, slug in sorted(self.K8S_TOPIC_PAGES.items(), key=lambda x: -len(x[0])):
+            if phrase in q_lower and slug not in seen:
+                seen.add(slug)
+                slugs.append(slug)
+        return slugs
+
+    async def _fetch_k8s_docs(self, query: str) -> list[dict]:
+        slugs = self._detect_k8s_topic_slugs(query)
+        if not slugs:
+            slugs = ["getting-started/kubernetes/endpoints", "k8s/guides/using-crds"]
+        docs: list[dict] = []
+        for slug in slugs[:3]:
+            url = f"https://ngrok.com/docs/{slug}"
+            page = await self._fetch_doc_page(url)
+            if not page:
+                continue
+            yaml_blocks = self._extract_yaml_blocks(page)
+            title_match = re.search(r'^#\s+(.+)', page, re.MULTILINE)
+            title = title_match.group(1).strip() if title_match else slug.split("/")[-1].replace("-", " ").title()
+            docs.append({
+                "title": title,
+                "link": url,
+                "content": page[:500],
+                "full_content": page[:4000],
+                "yaml_examples": yaml_blocks,
+            })
+        return docs
+
     async def search_docs(self, query: str, max_results: int = 3) -> list[dict]:
         """Search ngrok docs with multi-query, k8s filtering, and page enrichment."""
         query_lower = query.lower()
@@ -150,11 +198,19 @@ class NgrokMCPClient:
         if action_slug:
             action_doc = await self._fetch_action_doc(action_slug)
 
-        search_queries = self._build_search_queries(query)
+        k8s_docs: list[dict] = []
+        if wants_k8s:
+            k8s_docs = await self._fetch_k8s_docs(query)
+
+        search_queries = self._build_search_queries(query, wants_k8s=wants_k8s)
         results = await self._run_search_queries(search_queries, max_results)
 
         if action_doc:
             results = [action_doc] + [r for r in results if r.get("link") != action_doc["link"]]
+
+        if k8s_docs:
+            k8s_links = {d["link"] for d in k8s_docs}
+            results = k8s_docs + [r for r in results if r.get("link") not in k8s_links]
 
         if not wants_k8s:
             non_k8s = [r for r in results if not self._is_k8s_doc(r)]
@@ -173,7 +229,7 @@ class NgrokMCPClient:
                 if retry_non_k8s:
                     results = retry_non_k8s
 
-        results.sort(key=lambda r: self._score_result(r, query), reverse=True)
+        results.sort(key=lambda r: self._score_result(r, query, wants_k8s=wants_k8s), reverse=True)
         results = results[:max_results]
         results = await self._enrich_results(results)
         return results
@@ -235,9 +291,24 @@ class NgrokMCPClient:
                 return slug
         return None
 
-    def _build_search_queries(self, query: str) -> list[str]:
+    def _build_search_queries(self, query: str, wants_k8s: bool = False) -> list[str]:
         keywords = self._extract_keywords(query)
-        queries = [keywords]
+        queries: list[str] = []
+
+        if wants_k8s:
+            queries.extend([
+                f"{keywords} kubernetes",
+                f"{keywords} k8s",
+                f"{keywords} AgentEndpoint",
+                f"{keywords} CloudEndpoint",
+                "ngrok kubernetes operator",
+                "AgentEndpoint CRD",
+                "CloudEndpoint CRD",
+                f"{keywords} ingress",
+                f"{keywords} helm",
+            ])
+
+        queries.append(keywords)
         if keywords != query:
             queries.append(query)
 
@@ -247,9 +318,17 @@ class NgrokMCPClient:
             queries.append(slug)
             queries.append(f"{slug} traffic policy")
 
-        queries.append(f"{keywords} traffic policy action")
+        if not wants_k8s:
+            queries.append(f"{keywords} traffic policy action")
 
-        return queries
+        seen: set[str] = set()
+        deduped: list[str] = []
+        for q in queries:
+            q = q.strip()
+            if q and q not in seen:
+                seen.add(q)
+                deduped.append(q)
+        return deduped
 
     def _is_k8s_doc(self, result: dict) -> bool:
         title = result.get("title", "").lower()
@@ -257,14 +336,19 @@ class NgrokMCPClient:
         k8s_indicators = ["kubernetes", "k8s", "/k8s/", "operator", "ingress", "helm", "crd"]
         return any(kw in title or kw in link for kw in k8s_indicators)
 
-    def _score_result(self, result: dict, query: str) -> float:
-        """Score a result's relevance to the query based on keyword overlap."""
+    JUNK_LINK_PATTERNS = {"llms.txt", "/changelog", "/robots", "/sitemap"}
+
+    def _score_result(self, result: dict, query: str, wants_k8s: bool = False) -> float:
+        """Score a result's relevance to the query based on keyword overlap and intent."""
         query_lower = query.lower()
         query_words = [w for w in query_lower.split() if len(w) >= 3]
 
         title = result.get("title", "").lower()
         link = result.get("link", "").lower()
         content = result.get("content", "").lower()
+
+        if any(pat in link for pat in self.JUNK_LINK_PATTERNS):
+            return -100.0
 
         score = 0.0
 
@@ -292,6 +376,16 @@ class NgrokMCPClient:
         if query_words:
             matched = sum(1 for w in query_words if w in title or w in link)
             score += (matched / len(query_words)) * 5.0
+
+        if wants_k8s:
+            k8s_terms = ["kubernetes", "k8s", "operator", "helm", "crd",
+                         "agentendpoint", "cloudendpoint", "ingress"]
+            combined = title + " " + link + " " + content
+            k8s_hits = sum(1 for t in k8s_terms if t in combined)
+            score += k8s_hits * 3.0
+
+            if "/api-reference/" in link or "/api/" in link:
+                score -= 10.0
 
         return score
 
