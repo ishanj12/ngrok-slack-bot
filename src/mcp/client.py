@@ -367,7 +367,7 @@ class NgrokMCPClient:
 
     def _has_any_llm(self) -> bool:
         return (
-            (HAS_OPENAI and os.environ.get("OPENAI_API_KEY"))
+            (HAS_OPENAI and (os.environ.get("OPENAI_API_KEY") or os.environ.get("NGROK_API_KEY")))
             or (HAS_ANTHROPIC and os.environ.get("ANTHROPIC_API_KEY"))
             or (HAS_GEMINI and os.environ.get("GEMINI_API_KEY"))
         )
@@ -403,9 +403,13 @@ class NgrokMCPClient:
             )
             return response.text
 
-        if not HAS_OPENAI or not os.environ.get("OPENAI_API_KEY"):
+        openai_api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("NGROK_API_KEY")
+        if not HAS_OPENAI or not openai_api_key:
             return "Error: OpenAI API key required."
-        client = AsyncOpenAI()
+        openai_kwargs = {"api_key": openai_api_key}
+        if os.environ.get("NGROK_API_KEY") and not os.environ.get("OPENAI_API_KEY"):
+            openai_kwargs["base_url"] = "https://ngrok-slack-bot.ngrok.dev"
+        client = AsyncOpenAI(**openai_kwargs)
         response = await client.chat.completions.create(
             model=model,
             messages=[
