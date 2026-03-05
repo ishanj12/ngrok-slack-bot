@@ -536,12 +536,31 @@ class NgrokMCPClient:
             or (HAS_GEMINI and os.environ.get("GEMINI_API_KEY"))
         )
 
+    FALLBACK_MODELS = {
+        "anthropic": "gpt-4o-mini",
+        "gemini": "gpt-4o-mini",
+        "openai": "claude-sonnet-4-20250514",
+    }
+
     async def _call_llm(self, system_prompt: str, user_content: str, model: str, temperature: float = 0.3, max_tokens: int = 1000) -> str:
+        try:
+            return await self._call_llm_provider(system_prompt, user_content, model, temperature, max_tokens)
+        except Exception as e:
+            provider = self._get_provider(model)
+            fallback = self.FALLBACK_MODELS.get(provider)
+            if fallback and self._get_provider(fallback) != provider:
+                try:
+                    return await self._call_llm_provider(system_prompt, user_content, fallback, temperature, max_tokens)
+                except Exception:
+                    pass
+            return f"Error: {e}"
+
+    async def _call_llm_provider(self, system_prompt: str, user_content: str, model: str, temperature: float, max_tokens: int) -> str:
         provider = self._get_provider(model)
 
         if provider == "anthropic":
             if not HAS_ANTHROPIC or not os.environ.get("ANTHROPIC_API_KEY"):
-                return "Error: Anthropic API key required for Claude models."
+                raise RuntimeError("Anthropic API key required for Claude models.")
             client = AsyncAnthropic()
             response = await client.messages.create(
                 model=model,
@@ -554,7 +573,7 @@ class NgrokMCPClient:
 
         if provider == "gemini":
             if not HAS_GEMINI or not os.environ.get("GEMINI_API_KEY"):
-                return "Error: GEMINI_API_KEY required for Gemini models."
+                raise RuntimeError("GEMINI_API_KEY required for Gemini models.")
             client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
             response = await client.aio.models.generate_content(
                 model=model,
@@ -569,7 +588,7 @@ class NgrokMCPClient:
 
         openai_api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("NGROK_API_KEY")
         if not HAS_OPENAI or not openai_api_key:
-            return "Error: OpenAI API key required."
+            raise RuntimeError("OpenAI API key required.")
         openai_kwargs = {"api_key": openai_api_key}
         if os.environ.get("NGROK_API_KEY") and not os.environ.get("OPENAI_API_KEY"):
             openai_kwargs["base_url"] = "https://ngrok-slack-bot.ngrok.dev"
