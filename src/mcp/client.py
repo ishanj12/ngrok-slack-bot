@@ -651,15 +651,11 @@ class NgrokMCPClient:
 CONTEXT: {context_instruction}
 
 RULES:
-- Be concise: 1-3 sentences of explanation
-- YAML RULES (CRITICAL):
-  - Only include YAML if a ```yaml block appears VERBATIM in the Documentation Context
-  - If you include YAML, copy it EXACTLY from the documentation - character for character
-  - NEVER modify, adapt, simplify, or reformat YAML from the documentation
-  - NEVER generate YAML from field descriptions, configuration tables, or prose
-  - If no verbatim YAML block exists in the context, do NOT include any YAML - just explain the feature and link to the docs
-- If the question is conceptual or informational, just answer it - not every answer needs code
-- Do NOT show multiple examples for the same thing
+- Give a concise explanation (1-3 sentences), then include a relevant YAML example if one exists in the context
+- When the Documentation Context contains ```yaml blocks, ALWAYS include the most relevant one — copy it exactly as-is from the context
+- Pick only ONE yaml example that best fits the question — do not show multiple
+- NEVER invent or generate YAML on your own — only copy verbatim from the context
+- If no ```yaml block exists in the context, just explain the feature and link to the docs
 - Never invent fields, commands, or configuration options not in the documentation
 - Include the source URL at the end
 - Use prior thread conversation (if provided) to understand follow-ups
