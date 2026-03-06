@@ -46,7 +46,9 @@ class ZendeskClient:
         requester_name: str = None,
         requester_email: str = None,
         priority: str = "normal",
-        tags: list[str] = None
+        tags: list[str] = None,
+        group_id: int = None,
+        organization_id: int = None,
     ) -> TicketResult:
         """
         Create a support ticket in Zendesk.
@@ -58,6 +60,8 @@ class ZendeskClient:
             requester_email: Email of the requester
             priority: low, normal, high, or urgent
             tags: List of tags to add to the ticket
+            group_id: Zendesk group to assign the ticket to
+            organization_id: Zendesk organization to associate with the ticket
         
         Returns:
             TicketResult with ticket ID and URL if successful
@@ -83,6 +87,12 @@ class ZendeskClient:
         if tags:
             ticket_data["ticket"]["tags"] = tags
         
+        if group_id:
+            ticket_data["ticket"]["group_id"] = group_id
+        
+        if organization_id:
+            ticket_data["ticket"]["organization_id"] = organization_id
+        
         try:
             response = requests.post(
                 url,
@@ -107,6 +117,44 @@ class ZendeskClient:
         except requests.RequestException as e:
             return TicketResult(success=False, error=str(e))
     
+    def search_user_by_email(self, email: str) -> dict | None:
+        """Search for a Zendesk user by email and return their record."""
+        url = f"{self.base_url}/users/search.json"
+        response = requests.get(
+            url,
+            params={"query": email},
+            auth=self.auth,
+            timeout=(5, 30)
+        )
+        if response.status_code == 200:
+            users = response.json().get("users", [])
+            if users:
+                return users[0]
+        return None
+
+    def get_organization(self, org_id: int) -> dict | None:
+        """Get an organization by ID, including custom fields."""
+        url = f"{self.base_url}/organizations/{org_id}.json"
+        response = requests.get(url, auth=self.auth, timeout=(5, 30))
+        if response.status_code == 200:
+            return response.json().get("organization", {})
+        return None
+
+    def lookup_org_for_email(self, email: str) -> dict | None:
+        """Look up a user by email and return their organization details.
+
+        Returns a dict with org fields including ``organization_fields``
+        (where ``plans`` and ``support_package`` live) and ``group_id``,
+        or ``None`` if the user/org is not found.
+        """
+        user = self.search_user_by_email(email)
+        if not user:
+            return None
+        org_id = user.get("organization_id")
+        if not org_id:
+            return None
+        return self.get_organization(org_id)
+
     def get_ticket(self, ticket_id: int) -> dict:
         """Get a ticket by ID. Reserved for future use."""
         url = f"{self.base_url}/tickets/{ticket_id}.json"
@@ -135,7 +183,9 @@ def create_support_ticket(
     requester_name: str = None,
     requester_email: str = None,
     priority: str = "normal",
-    tags: list[str] = None
+    tags: list[str] = None,
+    group_id: int = None,
+    organization_id: int = None,
 ) -> TicketResult:
     """Convenience function to create a support ticket."""
     client = get_zendesk_client()
@@ -145,5 +195,7 @@ def create_support_ticket(
         requester_name=requester_name,
         requester_email=requester_email,
         priority=priority,
-        tags=tags
+        tags=tags,
+        group_id=group_id,
+        organization_id=organization_id,
     )

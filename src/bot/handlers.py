@@ -391,8 +391,30 @@ def handle_ticket_submission(ack, body, client, view, logger):
         user_info = client.users_info(user=user_id)
         user_name = user_info["user"]["real_name"] or user_info["user"]["name"]
         
-        # Create Zendesk ticket
-        from src.zendesk.client import create_support_ticket
+        # Look up the requester's organization for routing
+        from src.zendesk.client import create_support_ticket, get_zendesk_client
+        
+        zd_client = get_zendesk_client()
+        org = zd_client.lookup_org_for_email(email)
+        
+        group_id = None
+        organization_id = None
+        tags = ["slack", "ngrok-bot"]
+        
+        if org:
+            organization_id = org.get("id")
+            group_id = org.get("group_id")
+            org_fields = org.get("organization_fields", {}) or {}
+            plan = org_fields.get("plans")
+            support_package = org_fields.get("support_package")
+            if plan:
+                tags.append(f"plan_{plan}")
+            if support_package:
+                tags.append(f"support_{support_package}")
+            logger.info(
+                f"Org lookup for {email}: org={org.get('name')}, "
+                f"plan={plan}, support_package={support_package}, group_id={group_id}"
+            )
         
         result = create_support_ticket(
             subject=subject,
@@ -400,7 +422,9 @@ def handle_ticket_submission(ack, body, client, view, logger):
             requester_name=user_name,
             requester_email=email,
             priority=priority,
-            tags=["slack", "ngrok-bot"]
+            tags=tags,
+            group_id=group_id,
+            organization_id=organization_id,
         )
         
         if result.success:
