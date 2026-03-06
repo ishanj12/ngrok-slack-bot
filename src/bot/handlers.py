@@ -384,7 +384,6 @@ def handle_ticket_submission(ack, body, client, view, logger):
         subject = values["subject_block"]["subject"]["value"]
         description = values["description_block"]["description"]["value"]
         email = values["email_block"]["email"]["value"]
-        priority = values["priority_block"]["priority"]["selected_option"]["value"]
         
         # Get user info
         user_id = body["user"]["id"]
@@ -397,13 +396,12 @@ def handle_ticket_submission(ack, body, client, view, logger):
         zd_client = get_zendesk_client()
         org = zd_client.lookup_org_for_email(email)
         
-        group_id = None
         organization_id = None
         tags = ["slack", "ngrok-bot"]
+        plan = None
         
         if org:
             organization_id = org.get("id")
-            group_id = org.get("group_id")
             org_fields = org.get("organization_fields", {}) or {}
             plan = org_fields.get("plans")
             support_package = org_fields.get("support_package")
@@ -413,8 +411,12 @@ def handle_ticket_submission(ack, body, client, view, logger):
                 tags.append(f"support_{support_package}")
             logger.info(
                 f"Org lookup for {email}: org={org.get('name')}, "
-                f"plan={plan}, support_package={support_package}, group_id={group_id}"
+                f"plan={plan}, support_package={support_package}"
             )
+        
+        priority = zd_client.priority_for_plan(plan)
+        group_id = zd_client.group_for_plan(plan)
+        logger.info(f"Auto-assigned priority='{priority}', group_id={group_id} for plan='{plan}'")
         
         result = create_support_ticket(
             subject=subject,
@@ -569,23 +571,6 @@ def _build_ticket_modal(subject: str = "", description: str = "", email: str = "
             "label": {"type": "plain_text", "text": "Description"}
         },
         _build_email_block(email),
-        {
-            "type": "input",
-            "block_id": "priority_block",
-            "element": {
-                "type": "static_select",
-                "action_id": "priority",
-                "placeholder": {"type": "plain_text", "text": "Select priority"},
-                "options": [
-                    {"text": {"type": "plain_text", "text": "Low"}, "value": "low"},
-                    {"text": {"type": "plain_text", "text": "Normal"}, "value": "normal"},
-                    {"text": {"type": "plain_text", "text": "High"}, "value": "high"},
-                    {"text": {"type": "plain_text", "text": "Urgent"}, "value": "urgent"}
-                ],
-                "initial_option": {"text": {"type": "plain_text", "text": "Normal"}, "value": "normal"}
-            },
-            "label": {"type": "plain_text", "text": "Priority"}
-        }
     ])
 
     return {
