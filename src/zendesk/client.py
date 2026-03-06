@@ -155,6 +155,54 @@ class ZendeskClient:
             return None
         return self.get_organization(org_id)
 
+    # Zendesk group IDs
+    GROUP_SELF_SERVICE = 12544898662797
+    GROUP_ENTERPRISE = 12544619291917
+
+    ENTERPRISE_PLANS = {"v2_enterprise"}
+    SELF_SERVICE_PLANS = {
+        "v1_basic", "v1_pro", "v1_business",
+        "v2_pro", "v3_paygo", "v3_hobbyist",
+    }
+
+    @staticmethod
+    def priority_for_plan(plans: str | None) -> str:
+        """Derive a ticket priority from the organization's plans field.
+
+        The ``plans`` value can contain multiple comma-separated plan names.
+        The highest-tier plan determines priority.
+        """
+        if not plans:
+            return "low"
+
+        plans_lower = plans.lower()
+
+        high_plans = {"v2_pro", "v1_pro", "v2_legacy_pro", "v2_enterprise"}
+        normal_plans = {"v3_paygo", "v2_paygo", "v2_personal", "v1_basic", "v2_legacy_basic"}
+
+        for plan in high_plans:
+            if plan in plans_lower:
+                return "high"
+        for plan in normal_plans:
+            if plan in plans_lower:
+                return "normal"
+
+        return "low"
+
+    @classmethod
+    def group_for_plan(cls, plans: str | None) -> int:
+        """Return the Zendesk group ID based on the organization's plans field."""
+        if not plans:
+            return cls.GROUP_SELF_SERVICE
+
+        plans_lower = plans.lower()
+
+        for plan in cls.ENTERPRISE_PLANS:
+            if plan in plans_lower:
+                return cls.GROUP_ENTERPRISE
+
+        return cls.GROUP_SELF_SERVICE
+
     def get_ticket(self, ticket_id: int) -> dict:
         """Get a ticket by ID. Reserved for future use."""
         url = f"{self.base_url}/tickets/{ticket_id}.json"
