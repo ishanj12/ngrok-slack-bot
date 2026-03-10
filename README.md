@@ -2,9 +2,9 @@
 
 A Slack bot that answers ngrok questions by searching the official documentation via [MCP](https://ngrok.com/docs/mcp), then synthesizing answers with YAML examples using an LLM. Supports OpenAI, Anthropic, and Gemini. Includes Zendesk ticket creation from conversations with automatic organization-based routing.
 
-## How to Use It
+Deployed on [Railway](https://railway.app) with auto-deploy from `main`.
 
-### In Slack
+## How to Use It
 
 | Method | Example |
 |---|---|
@@ -19,12 +19,6 @@ A Slack bot that answers ngrok questions by searching the official documentation
 
 Every bot response includes a **🎫 Create Support Ticket** button that pre-fills a Zendesk ticket from the conversation context.
 
-### CLI Mode (no Slack required)
-
-```bash
-python chat_cli.py
-```
-
 ## Features
 
 - 🔍 **Smart Search** — Multi-query search via ngrok's MCP server + direct doc page fetching for traffic policy actions and Kubernetes topics
@@ -35,51 +29,6 @@ python chat_cli.py
 - 🎫 **Zendesk Integration** — Create support tickets pre-filled from conversation context, with automatic organization-based routing and priority assignment
 - 🎯 **Fuzzy Matching** — Handles typos in action names (e.g., "ratelimting" → rate-limit)
 - 🏷️ **Query Classification** — Detects whether you're asking about the agent/CLI, Kubernetes, or the API, and tailors the response accordingly
-
-## Quick Start
-
-### 1. Clone and Setup
-
-```bash
-git clone https://github.com/ishanj12/ngrok-slack-bot.git
-cd ngrok-slack-bot
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-```
-
-### 2. Configure Environment
-
-```bash
-cp .env.example .env
-```
-
-Add your keys to `.env`:
-
-| Variable | Required | Description |
-|---|---|---|
-| `OPENAI_API_KEY` | At least one LLM key | OpenAI API key |
-| `ANTHROPIC_API_KEY` | Optional | Anthropic API key for Claude models |
-| `GEMINI_API_KEY` | Optional | Google API key for Gemini models |
-| `NGROK_API_KEY` | Optional | Routes OpenAI calls through the ngrok AI Gateway |
-| `SLACK_BOT_TOKEN` | For Slack bot | `xoxb-...` |
-| `SLACK_APP_TOKEN` | For Slack bot | `xapp-...` |
-| `SLACK_SIGNING_SECRET` | For Slack bot | Signing secret from Slack app settings |
-| `ZENDESK_SUBDOMAIN` | For tickets | Your Zendesk subdomain |
-| `ZENDESK_EMAIL` | For tickets | Zendesk admin email |
-| `ZENDESK_API_TOKEN` | For tickets | Zendesk API token |
-
-### 3. Run
-
-**CLI mode** (no Slack credentials needed):
-```bash
-python chat_cli.py
-```
-
-**Slack bot**:
-```bash
-python run_bot.py
-```
 
 ## Ticket Creation
 
@@ -139,28 +88,29 @@ ngrok-slack-bot/
 │       └── client.py           # Zendesk API client (tickets, org lookup, plan routing)
 ├── data/                       # Runtime data (model prefs, gitignored)
 ├── tests/                      # Tests (WIP)
-├── chat_cli.py                 # Interactive CLI for testing
+├── chat_cli.py                 # Interactive CLI for local testing
 ├── run_bot.py                  # Bot startup with env checks and cleanup
 ├── Procfile                    # Railway deployment (worker: python run_bot.py)
 ├── runtime.txt                 # Python version for Railway (3.11.9)
 └── requirements.txt
 ```
 
-## Slack App Setup
+## Environment Variables
 
-1. Go to [api.slack.com/apps](https://api.slack.com/apps) → **Create New App** → **From scratch**
-2. Enable **Socket Mode**
-3. Under **OAuth & Permissions**, add scopes: `app_mentions:read`, `chat:write`, `im:history`, `im:read`, `im:write`, `commands`, `users:read`, `users:read.email`
-4. Under **Event Subscriptions**, subscribe to: `app_mention`, `message.im`
-5. Create slash commands: `/ngrok-ask`, `/ngrok-yaml`, `/ngrok-help`, `/ngrokbot-model`, `/ngrok-ticket`
-6. Enable **Interactivity & Shortcuts** (required for modals used by ticket creation and model selection)
-7. Install the app to your workspace and add the tokens to `.env`
+Configured in Railway dashboard:
 
-## Requirements
-
-- Python 3.11+
-- At least one LLM API key (OpenAI, Anthropic, or Gemini)
-- Zendesk API credentials (for ticket creation)
+| Variable | Required | Description |
+|---|---|---|
+| `OPENAI_API_KEY` | At least one LLM key | OpenAI API key |
+| `ANTHROPIC_API_KEY` | Optional | Anthropic API key for Claude models |
+| `GEMINI_API_KEY` | Optional | Google API key for Gemini models |
+| `NGROK_API_KEY` | Optional | Routes OpenAI calls through the ngrok AI Gateway |
+| `SLACK_BOT_TOKEN` | Yes | `xoxb-...` |
+| `SLACK_APP_TOKEN` | Yes | `xapp-...` |
+| `SLACK_SIGNING_SECRET` | Yes | Signing secret from Slack app settings |
+| `ZENDESK_SUBDOMAIN` | For tickets | Your Zendesk subdomain |
+| `ZENDESK_EMAIL` | For tickets | Zendesk admin email |
+| `ZENDESK_API_TOKEN` | For tickets | Zendesk API token |
 
 ## License
 
