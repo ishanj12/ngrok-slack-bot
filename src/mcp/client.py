@@ -3,6 +3,7 @@ MCP Client for ngrok documentation.
 Connects to ngrok's official MCP server at https://ngrok.com/docs/mcp via HTTP.
 """
 
+import asyncio
 import difflib
 import json
 import os
@@ -52,6 +53,8 @@ class NgrokMCPClient:
             cls._instance = super().__new__(cls)
         return cls._instance
 
+    CONNECTION_TIMEOUT = 15
+
     @classmethod
     async def connect(cls) -> "NgrokMCPClient":
         """Connect to the ngrok MCP server and return the client instance."""
@@ -59,6 +62,21 @@ class NgrokMCPClient:
         if instance._connected:
             return instance
 
+        try:
+            await asyncio.wait_for(cls._do_connect(instance), timeout=cls.CONNECTION_TIMEOUT)
+        except asyncio.TimeoutError:
+            await cls.disconnect()
+            raise ConnectionError(
+                "ngrok MCP server is not responding. The documentation service may be temporarily unavailable."
+            )
+        except Exception:
+            await cls.disconnect()
+            raise
+
+        return instance
+
+    @classmethod
+    async def _do_connect(cls, instance: "NgrokMCPClient") -> None:
         instance._transport_context = streamablehttp_client(NGROK_MCP_URL)
         read, write, _ = await instance._transport_context.__aenter__()
 
@@ -67,8 +85,6 @@ class NgrokMCPClient:
 
         await instance._session.initialize()
         instance._connected = True
-
-        return instance
 
     @classmethod
     async def reconnect(cls) -> "NgrokMCPClient":
