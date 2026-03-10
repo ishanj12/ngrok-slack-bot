@@ -71,18 +71,32 @@ class NgrokMCPClient:
         return instance
 
     @classmethod
+    async def reconnect(cls) -> "NgrokMCPClient":
+        """Force a fresh connection to the MCP server."""
+        await cls.disconnect()
+        return await cls.connect()
+
+    @classmethod
     async def disconnect(cls) -> None:
         """Disconnect from the ngrok MCP server."""
         instance = cls._instance
-        if instance is None or not instance._connected:
+        if instance is None:
             return
 
-        if instance._session_context:
-            await instance._session_context.__aexit__(None, None, None)
-        if instance._transport_context:
-            await instance._transport_context.__aexit__(None, None, None)
+        try:
+            if instance._session_context:
+                await instance._session_context.__aexit__(None, None, None)
+        except Exception:
+            pass
+        try:
+            if instance._transport_context:
+                await instance._transport_context.__aexit__(None, None, None)
+        except Exception:
+            pass
 
         instance._session = None
+        instance._session_context = None
+        instance._transport_context = None
         instance._connected = False
 
     @property
@@ -92,7 +106,14 @@ class NgrokMCPClient:
         return self._session
 
     async def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> Any:
-        """Call an MCP tool and return the result."""
+        """Call an MCP tool and return the result. Auto-reconnects on failure."""
+        try:
+            return await self._call_tool_inner(name, arguments)
+        except Exception:
+            await self.__class__.reconnect()
+            return await self._call_tool_inner(name, arguments)
+
+    async def _call_tool_inner(self, name: str, arguments: dict[str, Any] | None = None) -> Any:
         result = await self.session.call_tool(name, arguments=arguments or {})
 
         if result.content:
