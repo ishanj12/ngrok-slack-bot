@@ -1,22 +1,40 @@
-# ngrok Slack Bot - Documentation Assistant
+# ngrok Slack Bot — Documentation Assistant
 
-A Slack bot that helps users find information in the ngrok documentation using the [ngrok-mcp](https://github.com/nijikokun/ngrok-mcp) server, and creates support tickets in Zendesk with automatic routing based on the customer's organization and plan.
+A Slack bot that answers ngrok questions by searching the official documentation via [MCP](https://ngrok.com/docs/mcp), then synthesizing answers with YAML examples using an LLM. Supports OpenAI, Anthropic, and Gemini. Includes Zendesk ticket creation from conversations with automatic organization-based routing.
+
+## How to Use It
+
+### In Slack
+
+| Method | Example |
+|---|---|
+| **Mention** | `@ngrok-bot how do I rate limit my endpoint?` |
+| **Direct message** | Just DM the bot with your question |
+| **Thread replies** | Reply in any thread where the bot has responded — it keeps context |
+| **`/ngrok-ask`** | `/ngrok-ask what is Traffic Policy?` |
+| **`/ngrok-yaml`** | `/ngrok-yaml rate limit API to 100 req/min` — generates YAML config |
+| **`/ngrokbot-model`** | Opens a dropdown to pick your LLM (GPT-4o, Claude, Gemini, etc.) |
+| **`/ngrok-ticket`** | Opens a modal to create a Zendesk support ticket |
+| **`/ngrok-help`** | Shows available commands and example questions |
+
+Every bot response includes a **🎫 Create Support Ticket** button that pre-fills a Zendesk ticket from the conversation context.
+
+### CLI Mode (no Slack required)
+
+```bash
+python chat_cli.py
+```
 
 ## Features
 
-- **Smart Search** — Searches ngrok documentation via MCP
-- **AI-Powered Answers** — Synthesizes concise answers from docs using configurable LLM models (OpenAI, Anthropic, Gemini)
-- **Multiple Interaction Methods**:
-  - Mention the bot: `@ngrok-bot your question`
-  - Direct message the bot
-  - Slash commands: `/ngrok-ask`, `/ngrok-yaml`, `/ngrok-help`
-- **Real-time Docs** — Uses ngrok's official documentation catalog
-- **No Scraping Required** — MCP server handles doc fetching and caching
-- **Zendesk Ticket Creation** — Create support tickets directly from Slack with automatic organization-based routing
-- **Automatic Ticket Categorization** — Tickets are auto-assigned a priority and routed to the correct Zendesk support group based on the requester's organization plan
-
-## Architecture
-https://mermaid.live/edit#pako:eNqNV-tu2zYUfhVCRYEEkxM7tZ1GP4ZlSVEUy6VoMhRbUwi0RMmEKVIjqTRuGqAPsSfYo_VJdg4pyaKTFvWPgDyXj-fyHYq5jzKVsyiJCqE-ZUuqLbk-vZEEfqZZlJrWS3IlaLbyMvxVTFqu5Ieb6Dda12m7JewWFjfRx41hXoFNxYyhJfNqsnN6TvaJXWpGc6JZLda7gYsR1CzBa1-WWq1G1Kxi0q7XtBL9ZslE3Tsymd_IrZiXVOaCaQNY3XKvXgdneXm6SScU7Ow-Ze1y6tdgcyO_ff2PFFxYphMC6SlNFsqOaiglz3hNLcu7hJUU69aBl1JpBiUoG0E1gcpLyQSpTGleOhYKsTkXNlvBgSTVzNRK5mCGBimYdqI-yloZa4hhVGdLLks8rYtf6YqCzrWaLITKVuaH9aXGcGOptHCea0naS7brjNE4EzDt1zu7wIOSSaahQF6UYoddrDtmLTPyCQ6qoW9hqosyFUrVgPU7hAp-jczhCHDgqiUZ6hFFNzLlMl30drs_TCkTnLl8_ALDIN--_ksuMLbzk7cnTrqdmc9pqx2-wqDyizRXmembkC4aLvK0Vf3TMM3ZQItBf0e3emlaokHzOnuTAY-w042wUFRN5Qq1w3CY1NyFk_pVa70BLpjNlmSvykkNo2rILadkaW191-rZndU0s-Sv4_OzjhytZyNEmilpsXLJdDwefwy75XLN7B2e7jdQDO9xZ10AwBtWLQQjKCG_uEMCjEwgtYo1QnRrV5u18181C6YlsxD3PqE1x7_ldqeAH9ZVwC2Y4Z9hjKT5xLTDuKyZPH5DytqOpmpUcckDb4Bz5ASAnrI9WQPfHxIM8oNIKcK8apfkiulbnrFw6KusBg7oW6bB9JxLKyBlAhx05kzDqdgek-z763AvU9U-kmwfPJH5V45AjrmnKmvwRqPukrZKia17DfucOgZ0o0wQakMHBHRW5PWr69BZQe6Ug19bhOO3b9Aa-eORaq3u1k-OXffZGI1-3bqJvT6vhqq8amuJ34ehAoavQwxRnNHgXgxsWvDvqUH-WO8tBqLexKW6UfvMUdneVZ3hAMOJ_Ji3ibk1ir9Ay6HTGYXJwnbdRF8GhNi2boe7Ky-uW5B-qBFg0OVt082Mek2_dcpu4Lyu2_nwcZTaeHDZngufMouErAXDPhg83vPE23bD9BPmj8H9zLqrAg0fNXAL3F1YTxp78-fP4QtcqVv4RLvUTlmBFMtWF_AowrtWJM8mdEIPWGwsdJUlz6b0iBVFnCmhdPKsKIrvI7UPjwDrgE3oAKsopvSnsPw3aQCFQAOoopgv5oufgoJyBDhBSEWRZVshDVrfTW2cV7Efxb5aQ6twEuN-6OLNfMXDQRoUagjTD1PcDhI6xZ77sSdw3LM17rgZO77EPRM2lQsS6ScqHsxG7JnXlSiKo1LzPEqsblgMT1l4JOE2ukco_LxnjeZ2fQbvDpjTBEUWwgK6xQMLhqoP_vSNKA4EG5RensNQgKJYnyhZcPiko-JjC_xImZD7zvH47Ozy_avT9Pr49dXgaFTRHh93i2CHFMCXw0DEgx2rgi3-4xAIah3uTU1laBCern1KXVLD0I-vr98NcmpDH6SCEnhUFwNEFFluBetgAdgvHkL89M-LPy4u31-kb99dXl-eXJ65KhVUGEeRh7bE8E6omO9qzgoKLyYEfgBSQF5_K1V1vIC3ZbmMEgcQR02dw_vglFP46G9M4MvH9Ak8Qm2UTGcvHEaU3Ed3UTKZTfbm05ezo-l8PJ-Mx4cHcbSOktFsvDebHL6cjA9nR_PZfPbiIY4-u2PHe0ezw9nh4ezFfDIDv8nBw__uDpOW
+- 🔍 **Smart Search** — Multi-query search via ngrok's MCP server + direct doc page fetching for traffic policy actions and Kubernetes topics
+- 🤖 **Multi-Provider LLM** — Choose between OpenAI (GPT-4o-mini, GPT-4o, o3-mini), Anthropic (Claude Sonnet 4, Claude 3.5 Haiku), or Google (Gemini 2.5 Flash/Pro) per user
+- 🔄 **Auto-Fallback** — If your selected model's provider fails, the bot silently retries with another provider
+- 📝 **YAML Examples** — Includes verbatim YAML from the docs when relevant
+- 🧵 **Thread Context** — Understands follow-up questions in threads
+- 🎫 **Zendesk Integration** — Create support tickets pre-filled from conversation context, with automatic organization-based routing and priority assignment
+- 🎯 **Fuzzy Matching** — Handles typos in action names (e.g., "ratelimting" → rate-limit)
+- 🏷️ **Query Classification** — Detects whether you're asking about the agent/CLI, Kubernetes, or the API, and tailors the response accordingly
 
 ## Quick Start
 
@@ -25,74 +43,43 @@ https://mermaid.live/edit#pako:eNqNV-tu2zYUfhVCRYEEkxM7tZ1GP4ZlSVEUy6VoMhRbUwi0R
 ```bash
 git clone https://github.com/ishanj12/ngrok-slack-bot.git
 cd ngrok-slack-bot
-
-# Create virtual environment
 python3 -m venv venv
 source venv/bin/activate
-
-# Install dependencies
 pip install -r requirements.txt
 ```
 
-### 2. Setup ngrok-mcp
-
-```bash
-git clone https://github.com/nijikokun/ngrok-mcp.git
-cd ngrok-mcp && npm install && npm run build && cd ..
-```
-
-### 3. Configure Environment
+### 2. Configure Environment
 
 ```bash
 cp .env.example .env
 ```
 
 Add your keys to `.env`:
-```
-# Required
-NGROK_API_KEY=your-ngrok-api-key          # From dashboard.ngrok.com/api
-OPENAI_API_KEY=your-openai-api-key        # For AI answers
 
-# Slack
-SLACK_BOT_TOKEN=xoxb-...
-SLACK_APP_TOKEN=xapp-...
-SLACK_SIGNING_SECRET=...
+| Variable | Required | Description |
+|---|---|---|
+| `OPENAI_API_KEY` | At least one LLM key | OpenAI API key |
+| `ANTHROPIC_API_KEY` | Optional | Anthropic API key for Claude models |
+| `GEMINI_API_KEY` | Optional | Google API key for Gemini models |
+| `NGROK_API_KEY` | Optional | Routes OpenAI calls through the ngrok AI Gateway |
+| `SLACK_BOT_TOKEN` | For Slack bot | `xoxb-...` |
+| `SLACK_APP_TOKEN` | For Slack bot | `xapp-...` |
+| `SLACK_SIGNING_SECRET` | For Slack bot | Signing secret from Slack app settings |
+| `ZENDESK_SUBDOMAIN` | For tickets | Your Zendesk subdomain |
+| `ZENDESK_EMAIL` | For tickets | Zendesk admin email |
+| `ZENDESK_API_TOKEN` | For tickets | Zendesk API token |
 
-# Zendesk (required for ticket creation)
-ZENDESK_SUBDOMAIN=your-subdomain
-ZENDESK_EMAIL=your-email@company.com
-ZENDESK_API_TOKEN=your-zendesk-api-token
-```
+### 3. Run
 
-### 4. Run CLI Mode (No Slack Required)
-
+**CLI mode** (no Slack credentials needed):
 ```bash
 python chat_cli.py
 ```
 
-Example:
-```
-Connecting to ngrok-mcp server...
-Connected! Available tools: search_ngrok_docs, get_doc, ...
-
-Your question: How do I restrict IPs with Traffic Policy?
-```
-
-### 5. Run Slack Bot
-
+**Slack bot**:
 ```bash
 python run_bot.py
 ```
-
-## Slash Commands
-
-| Command | Description |
-|---------|-------------|
-| `/ngrok-ask <question>` | Ask a question about ngrok |
-| `/ngrok-yaml <description>` | Generate an ngrok YAML configuration |
-| `/ngrokbot-model` | Select your preferred AI model |
-| `/ngrok-ticket` | Create a support ticket |
-| `/ngrok-help` | Show help and usage info |
 
 ## Ticket Creation
 
@@ -142,60 +129,34 @@ When a ticket is submitted, the bot automatically:
 ngrok-slack-bot/
 ├── src/
 │   ├── mcp/
-│   │   ├── client.py             # MCP client (connects to ngrok-mcp)
-│   │   └── ngrok_assistant.py    # Sync wrappers for Slack handlers
+│   │   ├── client.py           # MCP client — search pipeline, LLM dispatch, doc fetching
+│   │   └── ngrok_assistant.py  # Async-to-sync bridge for Slack handlers
 │   ├── bot/
-│   │   ├── app.py                # Slack Bolt app & event routing
-│   │   ├── handlers.py           # Message/command/ticket handlers
-│   │   └── models.py             # Per-user AI model preferences
+│   │   ├── app.py              # Slack Bolt app (Socket Mode)
+│   │   ├── handlers.py         # Mention/DM/slash command handlers, ticket modals
+│   │   └── models.py           # Per-user model preferences (persisted to disk)
 │   └── zendesk/
-│       └── client.py             # Zendesk API client (tickets, org lookup, plan routing)
-├── chat_cli.py                   # Interactive CLI
-├── run_bot.py                    # Bot startup script
-├── ngrok-mcp/                    # Clone of ngrok-mcp server (gitignored)
+│       └── client.py           # Zendesk API client (tickets, org lookup, plan routing)
+├── data/                       # Runtime data (model prefs, gitignored)
+├── chat_cli.py                 # Interactive CLI for testing
+├── run_bot.py                  # Bot startup with env checks and cleanup
+├── Procfile                    # Railway deployment (worker: python run_bot.py)
 └── requirements.txt
 ```
 
 ## Slack App Setup
 
-### 1. Create Slack App
-
-1. Go to [api.slack.com/apps](https://api.slack.com/apps)
-2. **Create New App** --> **From scratch**
-3. Enable **Socket Mode**
-
-### 2. Add Bot Scopes
-
-Under **OAuth & Permissions**:
-- `app_mentions:read`, `chat:write`, `im:history`, `im:read`, `im:write`, `commands`, `users:read`, `users:read.email`
-
-### 3. Subscribe to Events
-
-- `app_mention`, `message.im`
-
-### 4. Create Slash Commands
-
-- `/ngrok-ask` -- Ask a question about ngrok
-- `/ngrok-yaml` -- Get YAML configuration help
-- `/ngrokbot-model` -- Select AI model
-- `/ngrok-ticket` -- Create a support ticket
-- `/ngrok-help` -- Show help message
-
-### 5. Enable Interactivity
-
-Turn on **Interactivity & Shortcuts** (required for modals used by ticket creation and model selection).
-
-### 6. Run
-
-```bash
-python run_bot.py
-```
+1. Go to [api.slack.com/apps](https://api.slack.com/apps) → **Create New App** → **From scratch**
+2. Enable **Socket Mode**
+3. Under **OAuth & Permissions**, add scopes: `app_mentions:read`, `chat:write`, `im:history`, `im:read`, `im:write`, `commands`, `users:read`, `users:read.email`
+4. Under **Event Subscriptions**, subscribe to: `app_mention`, `message.im`
+5. Create slash commands: `/ngrok-ask`, `/ngrok-yaml`, `/ngrok-help`, `/ngrokbot-model`, `/ngrok-ticket`
+6. Enable **Interactivity & Shortcuts** (required for modals used by ticket creation and model selection)
+7. Install the app to your workspace and add the tokens to `.env`
 
 ## Requirements
 
 - Python 3.11+
-- Node.js (for ngrok-mcp)
-- ngrok API key
 - At least one LLM API key (OpenAI, Anthropic, or Gemini)
 - Zendesk API credentials (for ticket creation)
 
