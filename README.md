@@ -11,11 +11,8 @@ Deployed on [Railway](https://railway.app) with auto-deploy from `main`.
 | **Mention** | `@ngrok-bot how do I rate limit my endpoint?` |
 | **Direct message** | Just DM the bot with your question |
 | **Thread replies** | Reply in any thread where the bot has responded — it keeps context |
-| **`/ngrok-ask`** | `/ngrok-ask what is Traffic Policy?` |
-| **`/ngrok-yaml`** | `/ngrok-yaml rate limit API to 100 req/min` — generates YAML config |
 | **`/ngrokbot-model`** | Opens a dropdown to pick your LLM (GPT-4o, Claude, Gemini, etc.) |
 | **`/ngrok-ticket`** | Opens a modal to create a Zendesk support ticket |
-| **`/ngrok-help`** | Shows available commands and example questions |
 
 Every bot response includes a **🎫 Create Support Ticket** button that pre-fills a Zendesk ticket from the conversation context.
 
@@ -82,7 +79,7 @@ ngrok-slack-bot/
 │   │   └── ngrok_assistant.py  # Async-to-sync bridge for Slack handlers
 │   ├── bot/
 │   │   ├── app.py              # Slack Bolt app (Socket Mode)
-│   │   ├── handlers.py         # Mention/DM/slash command handlers, ticket modals
+│   │   ├── handlers.py         # Mention/DM handlers, model selection, ticket modals
 │   │   └── models.py           # Per-user model preferences (persisted to disk)
 │   └── zendesk/
 │       └── client.py           # Zendesk API client (tickets, org lookup, plan routing)

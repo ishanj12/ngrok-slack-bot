@@ -21,30 +21,9 @@ def handle_app_mention(event, say, client, logger):
 @app.event("message")
 def handle_message_events(event, say, client, logger):
     """Handle direct messages and threaded replies to the bot"""
-    print(f"DEBUG message event: {event}")
     from src.bot.handlers import handle_dm
     handle_dm(event, say, client, logger)
 
-
-@app.command("/ngrok-help")
-def handle_help_command(ack, command, say):
-    """Handle /ngrok-help slash command"""
-    from src.bot.handlers import handle_help
-    handle_help(ack, command, say)
-
-
-@app.command("/ngrok-ask")
-def handle_ask_command(ack, command, say, logger):
-    """Handle /ngrok-ask slash command"""
-    from src.bot.handlers import handle_ask
-    handle_ask(ack, command, say, logger)
-
-
-@app.command("/ngrok-yaml")
-def handle_yaml_command(ack, command, say, logger):
-    """Handle /ngrok-yaml slash command"""
-    from src.bot.handlers import handle_yaml
-    handle_yaml(ack, command, say, logger)
 
 
 @app.command("/ngrokbot-model")

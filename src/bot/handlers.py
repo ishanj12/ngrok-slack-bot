@@ -3,7 +3,7 @@ import os
 import re
 
 from src.bot.models import get_available_models, get_user_model, set_user_model
-from src.mcp.ngrok_assistant import ask_ngrok, generate_ngrok_yaml
+from src.mcp.ngrok_assistant import ask_ngrok
 
 try:
     from openai import OpenAI
@@ -248,89 +248,6 @@ def handle_model_submission(ack, body, client, view, logger):
         text=f"Model set to *{model_name}* (`{selected}`) for all your future queries."
     )
 
-
-def handle_help(ack, command, say):
-    """Handle /ngrok-help command"""
-    ack()
-    
-    say(
-        blocks=[
-            {
-                "type": "header",
-                "text": {
-                    "type": "plain_text",
-                    "text": "🚀 ngrok Documentation Bot Help"
-                }
-            },
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": "*How to use this bot:*\n\n1. *Mention the bot* - `@ngrok-bot your question`\n2. *Direct message* - Send a DM with your question\n3. *Use slash commands* - Try the commands below"
-                }
-            },
-            {"type": "divider"},
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": "*Available Commands:*\n\n• `/ngrok-ask <question>` - Ask a question about ngrok\n• `/ngrok-yaml <description>` - Get YAML configuration help\n• `/ngrokbot-model` - Select your AI model\n• `/ngrok-ticket` - Create a support ticket\n• `/ngrok-help` - Show this help message"
-                }
-            },
-            {"type": "divider"},
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": "*Example Questions:*\n\n• What is ngrok?\n• How do I create an HTTP tunnel?\n• Show me authentication examples\n• How do I use Traffic Policy?\n• What are ngrok endpoints?"
-                }
-            }
-        ]
-    )
-
-
-def handle_ask(ack, command, say, logger):
-    """Handle /ngrok-ask command"""
-    ack()
-    
-    question = command.get("text", "").strip()
-    
-    if not question:
-        say(text="Please provide a question. Example: `/ngrok-ask What is ngrok?`")
-        return
-    
-    try:
-        model = get_user_model(command["user_id"])
-        _ask_and_respond(question, say, logger, searching_msg=f"🔍 Searching for: _{question}_", model=model)
-    except Exception as e:
-        say(text=f"Sorry, I encountered an error: {str(e)}")
-
-
-def handle_yaml(ack, command, say, logger):
-    """Handle /ngrok-yaml command - generates custom YAML configurations"""
-    ack()
-    
-    request = command.get("text", "").strip()
-    
-    if not request:
-        say(text="Please describe what you need. Example: `/ngrok-yaml rate limit API to 100 requests per minute`")
-        return
-    
-    try:
-        say(text=f"⚙️ Generating YAML configuration for: _{request}_")
-        
-        model = get_user_model(command["user_id"])
-        result = generate_ngrok_yaml(request, model=model)
-        
-        if result and not result.startswith("Error"):
-            blocks = format_answer_for_slack(result)
-            say(text=result[:200], blocks=blocks)
-        else:
-            logger.error(f"YAML generation error: {result}")
-            say(text=f"Sorry, I couldn't generate that configuration: {result}")
-    except Exception as e:
-        logger.error(f"Error in handle_yaml: {e}")
-        say(text=f"Sorry, I encountered an error: {str(e)}")
 
 
 def _get_user_email(client, user_id: str, logger) -> str:
