@@ -138,9 +138,11 @@ ngrok-slack-bot/
 │   └── zendesk/
 │       └── client.py           # Zendesk API client (tickets, org lookup, plan routing)
 ├── data/                       # Runtime data (model prefs, gitignored)
+├── tests/                      # Tests (WIP)
 ├── chat_cli.py                 # Interactive CLI for testing
 ├── run_bot.py                  # Bot startup with env checks and cleanup
 ├── Procfile                    # Railway deployment (worker: python run_bot.py)
+├── runtime.txt                 # Python version for Railway (3.11.9)
 └── requirements.txt
 ```
 

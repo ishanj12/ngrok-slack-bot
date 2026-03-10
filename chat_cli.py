@@ -63,8 +63,6 @@ class NgrokChatCLI:
         print("   • How do I configure authentication?")
         print("   • Show me YAML configuration examples")
         print("\n💡 Special commands:")
-        print("   • list    - List available documentation")
-        print("   • cache   - Show cache status")
         print("   • tools   - List available MCP tools")
         print("\n" + "=" * 80)
         
@@ -82,20 +80,8 @@ class NgrokChatCLI:
                 if question.lower() in ['help', '?']:
                     print("\n📖 Commands:")
                     print("   • Ask any question about ngrok")
-                    print("   • 'list' - List available docs")
-                    print("   • 'cache' - Show cache status")
                     print("   • 'tools' - List MCP tools")
                     print("   • 'exit' or 'quit' to stop")
-                    continue
-                
-                if question.lower() == 'list':
-                    result = await self.client.list_docs()
-                    print(f"\n📚 Available documentation:\n{result}")
-                    continue
-                
-                if question.lower() == 'cache':
-                    result = await self.client.docs_cache_status()
-                    print(f"\n💾 Cache status:\n{result}")
                     continue
                 
                 if question.lower() == 'tools':
