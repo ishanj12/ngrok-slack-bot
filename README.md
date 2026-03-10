@@ -8,7 +8,7 @@ A Slack bot that answers ngrok questions by searching the official documentation
 
 | Method | Example |
 |---|---|
-| **Mention** | `@ngrok-bot how do I rate limit my endpoint?` |
+| **Mention** | `@ngrok-zd-help-bot how do I rate limit my endpoint?` |
 | **Direct message** | Just DM the bot with your question |
 | **Thread replies** | Reply in any thread where the bot has responded — it keeps context |
 | **`/ngrok-ask`** | `/ngrok-ask what is Traffic Policy?` |

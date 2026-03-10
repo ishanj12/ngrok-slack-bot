@@ -266,7 +266,7 @@ def handle_help(ack, command, say):
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": "*How to use this bot:*\n\n1. *Mention the bot* - `@ngrok-bot your question`\n2. *Direct message* - Send a DM with your question\n3. *Use slash commands* - Try the commands below"
+                    "text": "*How to use this bot:*\n\n1. *Mention the bot* - `@ngrok-zd-help-bot your question`\n2. *Direct message* - Send a DM with your question\n3. *Use slash commands* - Try the commands below"
                 }
             },
             {"type": "divider"},
