@@ -149,6 +149,12 @@ def get_assistant() -> NgrokAssistant:
     return _assistant
 
 
+def get_ngrok_intent(query: str, thread_context: str = "") -> str:
+    """Get the intent classification without making an MCP call."""
+    client = NgrokMCPClient()
+    return client._detect_intent(query, thread_context)
+
+
 def ask_ngrok(query: str, thread_context: str = "", model: str = "gpt-4o-mini") -> str:
     """Sync wrapper to ask a question and get a synthesized answer."""
     try:
@@ -159,7 +165,11 @@ def ask_ngrok(query: str, thread_context: str = "", model: str = "gpt-4o-mini") 
 
 async def _ask_ngrok_async(query: str, thread_context: str = "", model: str = "gpt-4o-mini") -> str:
     """Async implementation of ask_ngrok."""
-    client = await NgrokMCPClient.connect()
+    client = NgrokMCPClient()
+    intent = client._detect_intent(query, thread_context)
+    if intent == "conversational":
+        return await client.ask(query, thread_context=thread_context, model=model)
+    await NgrokMCPClient.connect()
     return await client.ask(query, thread_context=thread_context, model=model)
 
 

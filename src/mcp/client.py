@@ -663,7 +663,7 @@ class NgrokMCPClient:
         )
         return response.choices[0].message.content
 
-    # ── Query triage ─────────────────────────────────────────────────────
+    # ── Intent detection ─────────────────────────────────────────────────
 
     KNOWN_TOPICS = {
         "tunnel": "tunnels",
@@ -706,88 +706,115 @@ class NgrokMCPClient:
         "billing": "pricing plans",
     }
 
-    def _triage_query(self, query: str, thread_context: str) -> str | None:
-        """Return a clarification message for vague queries, or None to proceed normally."""
-        stripped = query.strip()
-        if not stripped:
-            return None
+    GREETINGS = {"hi", "hey", "hello", "sup", "yo", "thanks", "thank", "ty", "thx"}
 
-        words = re.findall(r'[a-z0-9]+', stripped.lower())
+    def _detect_intent(self, query: str, thread_context: str) -> str:
+        """Classify query as 'conversational' or 'technical'."""
+        q = query.strip().lower()
+        if not q:
+            return "conversational"
+
+        words = re.findall(r'[a-z0-9]+', q)
+        if all(w in self.GREETINGS or len(w) <= 1 for w in words):
+            return "conversational"
+
+        meta_phrases = ["what can you do", "who are you", "how do you work", "what are you"]
+        if any(p in q for p in meta_phrases):
+            return "conversational"
+
+        if thread_context:
+            return "technical"
+
         keywords = [w for w in words if w not in self.FILLER_WORDS and len(w) > 1]
+        if not keywords:
+            return "conversational"
 
-        if len(keywords) == 0 and not thread_context:
-            return (
-                "I'd be happy to help! Could you tell me more about what you're looking for?\n\n"
-                "For example:\n"
-                "• _How do I set up rate limiting?_\n"
-                "• _What are ngrok endpoints?_\n"
-                "• _How do I configure Traffic Policy?_"
-            )
+        return "technical"
 
-        if len(keywords) == 1 and not thread_context:
-            word = keywords[0]
-            topic = self.KNOWN_TOPICS.get(word)
-            if topic:
-                return None
-            greetings = {"hi", "hey", "hello", "sup", "yo"}
-            if word in greetings:
-                return (
-                    "Hey! I'm the ngrok documentation bot. Ask me anything about ngrok!\n\n"
-                    "For example:\n"
-                    "• _How do I create an HTTP tunnel?_\n"
-                    "• _What is Traffic Policy?_\n"
-                    "• _How do I add authentication?_"
-                )
+    # ── Prompts ────────────────────────────────────────────────────────────
 
-        return None
+    CONVERSATIONAL_PROMPT = """You are ngrok Assistant, a friendly and knowledgeable ngrok solutions engineer in a Slack workspace.
+
+The user may be greeting you, thanking you, or asking what you can do.
+Respond naturally, briefly, and warmly. Offer 2-3 example questions you can help with.
+
+You specialize in: tunnels, endpoints, traffic policy, authentication, Kubernetes, the ngrok API, and more.
+Do NOT fabricate any specific configuration, YAML, CLI flags, or API details."""
+
+    TECHNICAL_PROMPT = """You are ngrok Assistant, a senior ngrok solutions engineer helping users in Slack.
+
+You have access to a "Documentation Context" below containing excerpts from ngrok's official docs.
+Treat this context as the source of truth for any factual claims about:
+- exact configuration fields, YAML/JSON structure, CLI flags
+- exact API endpoints, parameters, and behavior
+- product limits and feature availability
+
+You MAY:
+- explain concepts in your own words — be clear and helpful, not robotic
+- compare features, discuss trade-offs, and recommend best practices
+- give context on why something works a certain way
+
+You MUST:
+- never invent or guess exact config fields, YAML/JSON keys, CLI flags, or API parameters not present in the Documentation Context
+- when you include a config/YAML/command snippet, copy it verbatim from the context — do not edit or fabricate
+- if the user asks for specific config and no matching snippet exists in context, say so honestly and link to the relevant docs
+- if the question is ambiguous, ask 1-2 targeted clarifying questions
+
+{context_instruction}
+
+Response format:
+1. Direct answer (2-6 sentences), written naturally
+2. If available and relevant: ONE verbatim YAML/config snippet from the docs that best fits
+3. Source URL(s) at the end
+
+Use prior thread conversation (if provided) to understand follow-ups and resolve references like "it", "that", etc."""
+
+    TECHNICAL_NO_DOCS_PROMPT = """You are ngrok Assistant, a senior ngrok solutions engineer helping users in Slack.
+
+You could not find specific documentation for the user's question.
+Respond honestly: explain what you know generally about the topic, but clearly state that you couldn't confirm specifics from the docs.
+Ask 1-2 clarifying questions to help narrow down what they need.
+
+Do NOT invent exact configuration fields, YAML, CLI flags, or API parameters.
+If you can point them in the right direction (e.g., "check the Traffic Policy docs at https://ngrok.com/docs/traffic-policy"), do so."""
 
     # ── Ask ────────────────────────────────────────────────────────────────
 
     async def ask(self, question: str, max_results: int = 8, thread_context: str = "", model: str = "gpt-4o-mini") -> str:
-        clarification = self._triage_query(question, thread_context)
-        if clarification:
-            return clarification
+        intent = self._detect_intent(question, thread_context)
+
+        if intent == "conversational":
+            if self._has_any_llm():
+                user_content = question
+                if thread_context:
+                    user_content = f"Prior conversation:\n{thread_context}\n\nUser: {question}"
+                return await self._call_llm(self.CONVERSATIONAL_PROMPT, user_content, model, temperature=0.5, max_tokens=500)
+            return "Hey! I'm the ngrok documentation bot. Ask me anything about ngrok — tunnels, endpoints, traffic policy, auth, Kubernetes, and more."
 
         keywords = self._extract_keywords(question)
         keyword_list = keywords.split()
         if len(keyword_list) == 1 and keyword_list[0] in self.KNOWN_TOPICS:
-            question = self.KNOWN_TOPICS[keyword_list[0]]
+            search_query = self.KNOWN_TOPICS[keyword_list[0]]
+        else:
+            search_query = question
 
-        results = await self.search_docs(question, max_results=max_results)
+        results = await self.search_docs(search_query, max_results=max_results)
+
         if not results:
-            return (
-                "I couldn't find relevant documentation for your question. "
-                "Could you rephrase or add more detail?\n\n"
-                "For example, instead of a single word, try: _How do I configure [feature]?_"
-            )
+            if self._has_any_llm():
+                user_content = f"User question: {question}"
+                if thread_context:
+                    user_content = f"Prior conversation:\n{thread_context}\n\nFollow-up: {question}"
+                return await self._call_llm(self.TECHNICAL_NO_DOCS_PROMPT, user_content, model, temperature=0.4, max_tokens=800)
+            return "I couldn't find relevant documentation for that. Could you rephrase or add more detail about what you're trying to do?"
+
         context = self._build_doc_context(results)
         category = self._classify_query(question)
-        if self._has_any_llm():
-            return await self._synthesize_answer(question, context, category, thread_context=thread_context, model=model)
-        else:
-            best = results[0]
-            answer = f"**{best.get('title', 'Answer')}**\n\n{best.get('content', '')[:500]}"
-            if best.get('link'):
-                answer += f"\n\n🔗 {best['link']}"
-            return answer
+        return await self._synthesize_answer(question, context, category, thread_context=thread_context, model=model)
 
     async def _synthesize_answer(self, question: str, doc_context: str, category: str, thread_context: str = "", model: str = "gpt-4o-mini") -> str:
         context_instruction = self._format_context_instruction(category)
-
-        system_prompt = f"""You answer ngrok questions using ONLY the Documentation Context provided.
-
-CONTEXT: {context_instruction}
-
-RULES:
-- Give a concise explanation (1-3 sentences), then include a relevant YAML example if one exists in the context
-- When the Documentation Context contains ```yaml blocks, ALWAYS include the most relevant one — copy it exactly as-is from the context
-- Pick only ONE yaml example that best fits the question — do not show multiple
-- NEVER invent or generate YAML on your own — only copy verbatim from the context
-- If no ```yaml block exists in the context, just explain the feature and link to the docs
-- Never invent fields, commands, or configuration options not in the documentation
-- Include the source URL at the end
-- Use prior thread conversation (if provided) to understand follow-ups
-"""
+        system_prompt = self.TECHNICAL_PROMPT.format(context_instruction=context_instruction)
 
         user_content = f"Question: {question}\n\nDocumentation Context:\n{doc_context}"
         if thread_context:

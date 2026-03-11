@@ -3,7 +3,7 @@ import os
 import re
 
 from src.bot.models import get_available_models, get_user_model, set_user_model
-from src.mcp.ngrok_assistant import ask_ngrok
+from src.mcp.ngrok_assistant import ask_ngrok, get_ngrok_intent
 
 try:
     from openai import OpenAI
@@ -12,17 +12,13 @@ except ImportError:
     HAS_OPENAI = False
 
 
-CLARIFICATION_PREFIXES = (
-    "I'd be happy to help!",
-    "Hey! I'm the ngrok",
-    "I couldn't find relevant documentation",
-)
-
-
 def _ask_and_respond(query: str, say, logger, thread_ts: str | None = None, searching_msg: str = "🔍 Searching ngrok documentation...", channel: str | None = None, thread_context: str = "", model: str | None = None) -> None:
     """Common helper for asking ngrok and responding in Slack."""
-    say(text=searching_msg, thread_ts=thread_ts)
-    
+    intent = get_ngrok_intent(query, thread_context)
+
+    if intent == "technical":
+        say(text=searching_msg, thread_ts=thread_ts)
+
     kwargs = {"thread_context": thread_context}
     if model is not None:
         kwargs["model"] = model
@@ -30,8 +26,7 @@ def _ask_and_respond(query: str, say, logger, thread_ts: str | None = None, sear
     
     if answer and not answer.startswith("Error"):
         blocks = format_answer_for_slack(answer)
-        is_clarification = answer.startswith(CLARIFICATION_PREFIXES)
-        if not thread_context and not is_clarification:
+        if intent == "technical" and not thread_context:
             blocks.append({"type": "divider"})
             button_data = {"channel": channel or "", "thread_ts": thread_ts or ""}
             blocks.append({
