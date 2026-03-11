@@ -12,6 +12,13 @@ except ImportError:
     HAS_OPENAI = False
 
 
+CLARIFICATION_PREFIXES = (
+    "I'd be happy to help!",
+    "Hey! I'm the ngrok",
+    "I couldn't find relevant documentation",
+)
+
+
 def _ask_and_respond(query: str, say, logger, thread_ts: str | None = None, searching_msg: str = "🔍 Searching ngrok documentation...", channel: str | None = None, thread_context: str = "", model: str | None = None) -> None:
     """Common helper for asking ngrok and responding in Slack."""
     say(text=searching_msg, thread_ts=thread_ts)
@@ -23,7 +30,8 @@ def _ask_and_respond(query: str, say, logger, thread_ts: str | None = None, sear
     
     if answer and not answer.startswith("Error"):
         blocks = format_answer_for_slack(answer)
-        if not thread_context:
+        is_clarification = answer.startswith(CLARIFICATION_PREFIXES)
+        if not thread_context and not is_clarification:
             blocks.append({"type": "divider"})
             button_data = {"channel": channel or "", "thread_ts": thread_ts or ""}
             blocks.append({

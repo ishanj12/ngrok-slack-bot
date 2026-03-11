@@ -663,12 +663,103 @@ class NgrokMCPClient:
         )
         return response.choices[0].message.content
 
+    # ── Query triage ─────────────────────────────────────────────────────
+
+    KNOWN_TOPICS = {
+        "tunnel": "tunnels",
+        "tunnels": "tunnels",
+        "endpoint": "endpoints",
+        "endpoints": "endpoints",
+        "domain": "domains",
+        "domains": "domains",
+        "edge": "edges",
+        "edges": "edges",
+        "tls": "tls",
+        "tcp": "tcp",
+        "http": "http",
+        "https": "https",
+        "auth": "authentication",
+        "authentication": "authentication",
+        "oauth": "oauth",
+        "oidc": "oidc",
+        "saml": "saml",
+        "jwt": "jwt",
+        "webhook": "webhook verification",
+        "webhooks": "webhook verification",
+        "ip": "ip restrictions",
+        "traffic": "traffic policy",
+        "policy": "traffic policy",
+        "rate": "rate limiting",
+        "ratelimit": "rate limiting",
+        "agent": "ngrok agent",
+        "cli": "ngrok agent cli",
+        "api": "ngrok api",
+        "kubernetes": "kubernetes operator",
+        "k8s": "kubernetes operator",
+        "helm": "kubernetes helm installation",
+        "ingress": "kubernetes ingress",
+        "crd": "kubernetes custom resources",
+        "ssh": "ssh tunnels",
+        "logs": "observability logging",
+        "events": "events",
+        "pricing": "pricing plans",
+        "billing": "pricing plans",
+    }
+
+    def _triage_query(self, query: str, thread_context: str) -> str | None:
+        """Return a clarification message for vague queries, or None to proceed normally."""
+        stripped = query.strip()
+        if not stripped:
+            return None
+
+        words = re.findall(r'[a-z0-9]+', stripped.lower())
+        keywords = [w for w in words if w not in self.FILLER_WORDS and len(w) > 1]
+
+        if len(keywords) == 0 and not thread_context:
+            return (
+                "I'd be happy to help! Could you tell me more about what you're looking for?\n\n"
+                "For example:\n"
+                "• _How do I set up rate limiting?_\n"
+                "• _What are ngrok endpoints?_\n"
+                "• _How do I configure Traffic Policy?_"
+            )
+
+        if len(keywords) == 1 and not thread_context:
+            word = keywords[0]
+            topic = self.KNOWN_TOPICS.get(word)
+            if topic:
+                return None
+            greetings = {"hi", "hey", "hello", "sup", "yo"}
+            if word in greetings:
+                return (
+                    "Hey! I'm the ngrok documentation bot. Ask me anything about ngrok!\n\n"
+                    "For example:\n"
+                    "• _How do I create an HTTP tunnel?_\n"
+                    "• _What is Traffic Policy?_\n"
+                    "• _How do I add authentication?_"
+                )
+
+        return None
+
     # ── Ask ────────────────────────────────────────────────────────────────
 
     async def ask(self, question: str, max_results: int = 8, thread_context: str = "", model: str = "gpt-4o-mini") -> str:
+        clarification = self._triage_query(question, thread_context)
+        if clarification:
+            return clarification
+
+        keywords = self._extract_keywords(question)
+        keyword_list = keywords.split()
+        if len(keyword_list) == 1 and keyword_list[0] in self.KNOWN_TOPICS:
+            question = self.KNOWN_TOPICS[keyword_list[0]]
+
         results = await self.search_docs(question, max_results=max_results)
         if not results:
-            return "I couldn't find relevant documentation for your question."
+            return (
+                "I couldn't find relevant documentation for your question. "
+                "Could you rephrase or add more detail?\n\n"
+                "For example, instead of a single word, try: _How do I configure [feature]?_"
+            )
         context = self._build_doc_context(results)
         category = self._classify_query(question)
         if self._has_any_llm():
