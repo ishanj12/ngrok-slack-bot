@@ -40,27 +40,86 @@ NGROK_MCP_URL = "https://ngrok.com/docs/mcp"
 class NgrokMCPClient:
     """
     MCP client that connects to ngrok's official documentation MCP server.
+
+    Can be used in two ways:
+    1. As an async context manager (preferred for parallel requests)::
+
+           async with NgrokMCPClient() as client:
+               await client.ask(...)
+
+       Each context manager gets its own connection, so multiple requests
+       can run in parallel without cross-task cancel-scope issues.
+
+    2. Via the class-level connect()/disconnect() methods (for the CLI
+       where a single long-lived connection in one task is fine).
     """
 
+    # -- class-level singleton used only by connect()/disconnect() ---------
     _instance: "NgrokMCPClient | None" = None
+    _cls_session: ClientSession | None = None
+    _cls_session_context = None
+    _cls_transport_context = None
+    _cls_connected: bool = False
+
+    # -- per-instance state used by the context manager --------------------
     _session: ClientSession | None = None
     _session_context = None
     _transport_context = None
-    _connected: bool = False
 
-    def __new__(cls) -> "NgrokMCPClient":
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-        return cls._instance
+    def __init__(self) -> None:
+        # Per-instance state is initialised in __aenter__; nothing to do here.
+        pass
+
+    # -- async context manager (per-request connection) --------------------
+
+    async def __aenter__(self) -> "NgrokMCPClient":
+        self._transport_context = streamablehttp_client(NGROK_MCP_URL)
+        read, write, _ = await self._transport_context.__aenter__()
+
+        self._session_context = ClientSession(read, write)
+        self._session = await self._session_context.__aenter__()
+
+        await self._session.initialize()
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        try:
+            if self._session_context:
+                await self._session_context.__aexit__(exc_type, exc_val, exc_tb)
+        except Exception:
+            pass
+        finally:
+            self._session_context = None
+        try:
+            if self._transport_context:
+                # Shut down the underlying async generator explicitly so that
+                # Python's event-loop-level asyncgen finalizer doesn't try to
+                # close it in a different task (which triggers the anyio
+                # cancel-scope RuntimeError).
+                transport_gen = self._transport_context
+                self._transport_context = None
+                await transport_gen.aclose()
+        except Exception:
+            pass
+        self._session = None
+
+    # -- class-level singleton (for CLI / single-task usage) ---------------
 
     CONNECTION_TIMEOUT = 15
 
     @classmethod
     async def connect(cls) -> "NgrokMCPClient":
-        """Connect to the ngrok MCP server and return the client instance."""
-        instance = cls()
-        if instance._connected:
-            return instance
+        """Connect to the ngrok MCP server via a shared singleton.
+
+        Safe only when every caller runs in the **same** async task
+        (e.g. the interactive CLI).  For multi-task usage, prefer the
+        async context manager instead.
+        """
+        if cls._cls_connected and cls._instance is not None:
+            return cls._instance
+
+        instance = cls.__new__(cls)
+        instance.__init__()
 
         try:
             await asyncio.wait_for(cls._do_connect(instance), timeout=cls.CONNECTION_TIMEOUT)
@@ -77,14 +136,17 @@ class NgrokMCPClient:
 
     @classmethod
     async def _do_connect(cls, instance: "NgrokMCPClient") -> None:
-        instance._transport_context = streamablehttp_client(NGROK_MCP_URL)
-        read, write, _ = await instance._transport_context.__aenter__()
+        cls._cls_transport_context = streamablehttp_client(NGROK_MCP_URL)
+        read, write, _ = await cls._cls_transport_context.__aenter__()
 
-        instance._session_context = ClientSession(read, write)
-        instance._session = await instance._session_context.__aenter__()
+        cls._cls_session_context = ClientSession(read, write)
+        cls._cls_session = await cls._cls_session_context.__aenter__()
 
-        await instance._session.initialize()
-        instance._connected = True
+        await cls._cls_session.initialize()
+        cls._cls_connected = True
+
+        instance._session = cls._cls_session
+        cls._instance = instance
 
     @classmethod
     async def reconnect(cls) -> "NgrokMCPClient":
@@ -94,42 +156,34 @@ class NgrokMCPClient:
 
     @classmethod
     async def disconnect(cls) -> None:
-        """Disconnect from the ngrok MCP server."""
-        instance = cls._instance
-        if instance is None:
+        """Disconnect the shared singleton from the ngrok MCP server."""
+        if not cls._cls_connected:
             return
 
         try:
-            if instance._session_context:
-                await instance._session_context.__aexit__(None, None, None)
+            if cls._cls_session_context:
+                await cls._cls_session_context.__aexit__(None, None, None)
         except Exception:
             pass
         try:
-            if instance._transport_context:
-                await instance._transport_context.__aexit__(None, None, None)
+            if cls._cls_transport_context:
+                await cls._cls_transport_context.__aexit__(None, None, None)
         except Exception:
             pass
 
-        instance._session = None
-        instance._session_context = None
-        instance._transport_context = None
-        instance._connected = False
+        cls._cls_session = None
+        cls._cls_connected = False
+        if cls._instance is not None:
+            cls._instance._session = None
 
     @property
     def session(self) -> ClientSession:
         if self._session is None:
-            raise RuntimeError("MCP client not connected. Call connect() first.")
+            raise RuntimeError("MCP client not connected. Call connect() or use 'async with NgrokMCPClient()' first.")
         return self._session
 
     async def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> Any:
-        """Call an MCP tool and return the result. Auto-reconnects on failure."""
-        try:
-            return await self._call_tool_inner(name, arguments)
-        except Exception:
-            await self.__class__.reconnect()
-            return await self._call_tool_inner(name, arguments)
-
-    async def _call_tool_inner(self, name: str, arguments: dict[str, Any] | None = None) -> Any:
+        """Call an MCP tool and return the result."""
         result = await self.session.call_tool(name, arguments=arguments or {})
 
         if result.content:

@@ -2,53 +2,47 @@
 Ngrok Assistant - High-level wrapper for MCP client.
 
 Provides a simple interface for handlers to search and retrieve ngrok documentation.
+
+Each MCP request runs in its own thread with its own event loop via
+``asyncio.run()``.  This guarantees that the ``anyio`` cancel-scopes
+inside ``streamablehttp_client`` are entered and exited within the same
+task, avoiding the cross-task RuntimeError that occurs when multiple
+requests share a single event loop.
 """
 
 import asyncio
+import concurrent.futures
 import threading
 from dataclasses import dataclass
-from typing import Any, Coroutine
+from typing import Any, Callable, Coroutine
 
 from .client import NgrokMCPClient
 
 
-# Background event loop for MCP operations
-_loop: asyncio.AbstractEventLoop | None = None
-_thread: threading.Thread | None = None
-_lock = threading.Lock()
+# Thread pool for running MCP requests.  Each request gets its own thread
+# and its own ``asyncio.run()`` event loop, so anyio cancel-scopes never
+# cross task boundaries.
+_executor = concurrent.futures.ThreadPoolExecutor(max_workers=8)
 
 
-def _get_event_loop() -> asyncio.AbstractEventLoop:
-    """Get or create a background event loop for MCP operations."""
-    global _loop, _thread
-    
-    with _lock:
-        if _loop is None or not _loop.is_running():
-            _loop = asyncio.new_event_loop()
-            _thread = threading.Thread(target=_loop.run_forever, daemon=True)
-            _thread.start()
-    
-    return _loop
+def _run_in_own_loop(coro_factory: Callable[[], Coroutine[Any, Any, Any]]) -> Any:
+    """Run a coroutine factory in a fresh event loop (called inside a pool thread)."""
+    return asyncio.run(coro_factory())
 
 
-def run_in_background(coro: Coroutine[Any, Any, Any]) -> Any:
-    """Run a coroutine in the background event loop and wait for result."""
-    loop = _get_event_loop()
-    future = asyncio.run_coroutine_threadsafe(coro, loop)
-    return future.result(timeout=60)
+def run_in_background(coro_factory: Callable[[], Coroutine[Any, Any, Any]]) -> Any:
+    """Submit work to the thread pool and block for the result.
+
+    Each call gets its own thread + event loop, so ``anyio`` scopes are
+    fully isolated between concurrent requests.
+    """
+    future = _executor.submit(_run_in_own_loop, coro_factory)
+    return future.result(timeout=120)
 
 
 def shutdown_background_loop():
-    """Shutdown the background event loop."""
-    global _loop, _thread
-    
-    with _lock:
-        if _loop is not None and _loop.is_running():
-            _loop.call_soon_threadsafe(_loop.stop)
-            if _thread is not None:
-                _thread.join(timeout=2)
-            _loop = None
-            _thread = None
+    """Shutdown the thread pool."""
+    _executor.shutdown(wait=False)
 
 
 @dataclass
@@ -145,7 +139,7 @@ def get_assistant() -> NgrokAssistant:
     """Get or create the global assistant instance (sync wrapper)."""
     global _assistant
     if _assistant is None:
-        _assistant = run_in_background(NgrokAssistant.initialize())
+        _assistant = run_in_background(lambda: NgrokAssistant.initialize())
     return _assistant
 
 
@@ -158,19 +152,39 @@ def get_ngrok_intent(query: str, thread_context: str = "") -> str:
 def ask_ngrok(query: str, thread_context: str = "", model: str = "gpt-4o-mini") -> str:
     """Sync wrapper to ask a question and get a synthesized answer."""
     try:
-        return run_in_background(_ask_ngrok_async(query, thread_context, model))
+        return run_in_background(
+            lambda: _ask_ngrok_async(query, thread_context, model)
+        )
     except Exception as e:
         return f"Error: {e}"
 
 
 async def _ask_ngrok_async(query: str, thread_context: str = "", model: str = "gpt-4o-mini") -> str:
-    """Async implementation of ask_ngrok."""
+    """Async implementation of ask_ngrok.
+
+    Uses a per-request connection within the single worker task so the
+    transport's anyio cancel-scope is never crossed between tasks.
+    Conversational queries (no MCP docs needed) skip the connection.
+    """
     client = NgrokMCPClient()
     intent = client._detect_intent(query, thread_context)
     if intent == "conversational":
         return await client.ask(query, thread_context=thread_context, model=model)
-    await NgrokMCPClient.connect()
-    return await client.ask(query, thread_context=thread_context, model=model)
+    async with NgrokMCPClient() as client:
+        return await client.ask(query, thread_context=thread_context, model=model)
 
 
+def generate_ngrok_yaml(request: str, model: str = "gpt-4o") -> str:
+    """Sync wrapper to generate a custom ngrok YAML configuration."""
+    try:
+        return run_in_background(
+            lambda: _generate_yaml_async(request, model)
+        )
+    except Exception as e:
+        return f"Error: {e}"
 
+
+async def _generate_yaml_async(request: str, model: str = "gpt-4o") -> str:
+    """Async implementation of generate_ngrok_yaml."""
+    async with NgrokMCPClient() as client:
+        return await client.generate_yaml(request, model=model)
