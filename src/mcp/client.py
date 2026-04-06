@@ -887,7 +887,28 @@ Useful links: https://ngrok.com/docs, https://ngrok.com/docs/traffic-policy, htt
             if yaml_reference:
                 user_content += f"\n\nYAML Reference (you may copy ONE of these exactly):\n{yaml_reference}"
 
-        return await self._call_llm(system_prompt, user_content, model, temperature=0.3, max_tokens=1000)
+        answer = await self._call_llm(system_prompt, user_content, model, temperature=0.3, max_tokens=1000)
+        return self._strip_hallucinated_code(answer, yaml_reference)
+
+    def _strip_hallucinated_code(self, answer: str, yaml_reference: str) -> str:
+        """Remove any code blocks from the answer that aren't in the YAML reference."""
+        if not re.search(r'```', answer):
+            return answer
+
+        allowed_blocks: set[str] = set()
+        if yaml_reference:
+            for block in re.findall(r'```ya?ml\n(.*?)```', yaml_reference, re.DOTALL):
+                allowed_blocks.add(block.strip())
+
+        def check_block(match: re.Match) -> str:
+            block_content = match.group(1).strip()
+            if block_content in allowed_blocks:
+                return match.group(0)
+            return ""
+
+        cleaned = re.sub(r'```[^\n]*\n(.*?)```', check_block, answer, flags=re.DOTALL)
+        cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
+        return cleaned.strip()
 
     # ── YAML generation ───────────────────────────────────────────────────
 
