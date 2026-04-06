@@ -404,11 +404,9 @@ class NgrokMCPClient:
 
         return best_slug
 
-    QUERY_GEN_PROMPT = """Generate 3-5 concise search queries to find relevant ngrok documentation for the user's question.
-Think about: what doc pages would have the answer? What terms would those pages use?
-Include at least one query targeting configuration/setup examples if the user is asking how to do something.
-
-Respond with ONLY the queries, one per line. No numbering, no explanation."""
+    QUERY_GEN_PROMPT = """Generate exactly 3 short search queries to find ngrok documentation for this question.
+Include one query for conceptual docs and one for configuration/example docs.
+Output ONLY the queries, one per line."""
 
     async def _generate_search_queries(self, query: str, wants_k8s: bool = False) -> list[str]:
         """Use the LLM to generate intelligent search queries."""
@@ -422,7 +420,7 @@ Respond with ONLY the queries, one per line. No numbering, no explanation."""
             user_content = f"User question: {query}"
             if wants_k8s:
                 user_content += "\nContext: The user is asking about ngrok on Kubernetes."
-            raw = await self._call_llm(self.QUERY_GEN_PROMPT, user_content, "gpt-4o-mini", temperature=0, max_tokens=200)
+            raw = await self._call_llm(self.QUERY_GEN_PROMPT, user_content, "gpt-4o-mini", temperature=0, max_tokens=100)
             queries = [line.strip() for line in raw.strip().split('\n') if line.strip()]
             if queries:
                 queries.extend(fallback)
@@ -824,39 +822,40 @@ Respond naturally, briefly, and warmly. Offer 2-3 example questions you can help
 You specialize in: tunnels, endpoints, traffic policy, authentication, Kubernetes, the ngrok API, and more.
 Do NOT fabricate any specific configuration, YAML, CLI flags, or API details."""
 
-    TECHNICAL_PROMPT = """You are ngrok Assistant, a senior ngrok solutions engineer helping users in Slack.
+    TECHNICAL_PROMPT_WITH_YAML = """You are ngrok Assistant, a senior ngrok solutions engineer helping users in Slack.
 
-You have access to a "Documentation Context" and an optional "YAML Reference" below.
-The Documentation Context contains excerpts from ngrok's official docs.
-The YAML Reference contains numbered YAML snippets extracted from those docs (e.g. [YAML-1], [YAML-2]).
+Below you have "Documentation Context" (excerpts from ngrok's official docs) and "YAML Reference" (numbered snippets from those docs).
 
-You MAY:
-- explain concepts in your own words — be clear and helpful, not robotic
-- compare features, discuss trade-offs, and recommend best practices
+You MAY explain concepts in your own words — be clear and helpful, not robotic.
 
-STRICT RULES FOR CODE/CONFIG/YAML:
-- You MUST NOT write ANY code blocks, YAML, config, or CLI commands of your own
-- The ONLY code/YAML you may include is by copying a numbered snippet (e.g. [YAML-1]) EXACTLY as-is from the YAML Reference section
-- If no YAML Reference section exists or none of the snippets are relevant, do NOT include any code — just explain and link to the docs
-- NEVER invent, modify, adapt, or combine snippets
+YAML RULES:
+- You may include ONE snippet from the YAML Reference by copying it EXACTLY as-is
+- Do NOT modify, adapt, or combine snippets
+- Do NOT write any code/YAML/config of your own — only copy from the YAML Reference
 
 {context_instruction}
 
-Response format:
-1. Direct answer (2-6 sentences), written naturally
-2. If a numbered YAML snippet from the YAML Reference is relevant, copy ONE exactly as-is
-3. Source URL(s) at the end
+Respond with: a direct answer (2-6 sentences), then optionally ONE verbatim YAML snippet from the reference.
+Use prior thread conversation (if provided) to understand follow-ups."""
 
+    TECHNICAL_PROMPT_NO_YAML = """You are ngrok Assistant, a senior ngrok solutions engineer helping users in Slack.
+
+Below you have "Documentation Context" (excerpts from ngrok's official docs).
+
+You MAY explain concepts in your own words — be clear and helpful, not robotic.
+
+IMPORTANT: Do NOT include any code blocks, YAML, config snippets, or CLI commands in your response. No examples. Just explain the concept clearly in plain text.
+
+{context_instruction}
+
+Respond with a direct answer (2-6 sentences) in plain text. No code fences.
 Use prior thread conversation (if provided) to understand follow-ups."""
 
     TECHNICAL_NO_DOCS_PROMPT = """You are ngrok Assistant, a senior ngrok solutions engineer helping users in Slack.
 
 You could not find specific documentation for the user's question.
-You MUST NOT generate any YAML, config, CLI commands, or code examples.
-Instead, explain what you can at a high level and point them to the docs.
-Ask 1-2 clarifying questions to help narrow down what they need.
-
-Useful links: https://ngrok.com/docs, https://ngrok.com/docs/traffic-policy, https://ngrok.com/docs/api"""
+Do NOT include any code blocks, YAML, config, or CLI commands.
+Explain what you can at a high level and ask 1-2 clarifying questions."""
 
     # ── Ask ────────────────────────────────────────────────────────────────
 
@@ -890,21 +889,42 @@ Useful links: https://ngrok.com/docs, https://ngrok.com/docs/traffic-policy, htt
 
         doc_text, yaml_ref = self._build_doc_context(results)
         category = self._classify_query(question)
-        return await self._synthesize_answer(question, doc_text, yaml_ref, category, thread_context=thread_context, model=model)
+        doc_links = [r.get("link") for r in results if r.get("link")]
+
+        answer = await self._synthesize_answer(question, doc_text, yaml_ref, category, thread_context=thread_context, model=model)
+        return self._append_sources(answer, doc_links)
 
     async def _synthesize_answer(self, question: str, doc_context: str, yaml_reference: str, category: str, thread_context: str = "", model: str = "gpt-4o-mini") -> str:
         context_instruction = self._format_context_instruction(category)
-        system_prompt = self.TECHNICAL_PROMPT.format(context_instruction=context_instruction)
+
+        if yaml_reference:
+            system_prompt = self.TECHNICAL_PROMPT_WITH_YAML.format(context_instruction=context_instruction)
+        else:
+            system_prompt = self.TECHNICAL_PROMPT_NO_YAML.format(context_instruction=context_instruction)
 
         user_content = f"Question: {question}\n\nDocumentation Context:\n{doc_context}"
         if yaml_reference:
-            user_content += f"\n\nYAML Reference (you may copy ONE of these exactly):\n{yaml_reference}"
+            user_content += f"\n\nYAML Reference (copy ONE exactly if relevant):\n{yaml_reference}"
         if thread_context:
             user_content = f"Prior conversation in thread:\n{thread_context}\n\nFollow-up question: {question}\n\nDocumentation Context:\n{doc_context}"
             if yaml_reference:
-                user_content += f"\n\nYAML Reference (you may copy ONE of these exactly):\n{yaml_reference}"
+                user_content += f"\n\nYAML Reference (copy ONE exactly if relevant):\n{yaml_reference}"
 
-        return await self._call_llm(system_prompt, user_content, model, temperature=0.3, max_tokens=1000)
+        return await self._call_llm(system_prompt, user_content, model, temperature=0.2, max_tokens=1000)
+
+    @staticmethod
+    def _append_sources(answer: str, links: list[str]) -> str:
+        """Append doc source links to the answer if not already present."""
+        unique_links = []
+        seen = set()
+        for link in links:
+            if link and link not in seen and link not in answer:
+                seen.add(link)
+                unique_links.append(link)
+        if unique_links:
+            answer = answer.rstrip()
+            answer += "\n\n📚 " + " | ".join(unique_links[:3])
+        return answer
 
     # ── YAML generation ───────────────────────────────────────────────────
 
