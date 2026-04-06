@@ -9,6 +9,8 @@ import atexit
 import os
 import signal
 import sys
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -37,6 +39,26 @@ def check_environment():
     return True
 
 
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain")
+        self.end_headers()
+        self.wfile.write(b"ok")
+
+    def log_message(self, format, *args):
+        pass
+
+
+def start_health_server():
+    """Start a lightweight HTTP server for health checks (keeps Render free tier alive)."""
+    port = int(os.environ.get("PORT", 10000))
+    server = HTTPServer(("0.0.0.0", port), HealthHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    print(f"✓ Health server running on port {port}")
+
+
 def cleanup():
     """Cleanup MCP connection on exit"""
     print("\n🧹 Cleaning up...")
@@ -59,6 +81,7 @@ def main():
         sys.exit(1)
     
     print("\n✓ Environment variables loaded")
+    start_health_server()
     print("✓ Starting bot...\n")
     
     # Register cleanup handlers
