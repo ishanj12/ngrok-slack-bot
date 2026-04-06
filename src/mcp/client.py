@@ -583,20 +583,32 @@ class NgrokMCPClient:
 
     # ── Context building ──────────────────────────────────────────────────
 
-    def _build_doc_context(self, results: list[dict]) -> str:
+    def _build_doc_context(self, results: list[dict]) -> tuple[str, str]:
+        """Build doc context and a separate numbered YAML reference section.
+
+        Returns (doc_text, yaml_reference).  yaml_reference is empty when
+        there are no YAML examples.
+        """
         context_parts = []
+        yaml_parts = []
+        yaml_idx = 0
         for i, r in enumerate(results, 1):
             part = f"[{i}] {r.get('title', 'Doc')}\n"
             if r.get('link'):
                 part += f"URL: {r['link']}\n"
             content = r.get('full_content') or r.get('content', '')
             part += content
-            if r.get('yaml_examples'):
-                part += "\n\nYAML examples from this doc:\n"
-                for yaml_block in r['yaml_examples']:
-                    part += f"\n```yaml\n{yaml_block.strip()}\n```\n"
             context_parts.append(part)
-        return "\n\n---\n\n".join(context_parts)
+            if r.get('yaml_examples'):
+                for yaml_block in r['yaml_examples']:
+                    yaml_idx += 1
+                    yaml_parts.append(
+                        f"[YAML-{yaml_idx}] (from [{i}] {r.get('title', 'Doc')})\n"
+                        f"```yaml\n{yaml_block.strip()}\n```"
+                    )
+        doc_text = "\n\n---\n\n".join(context_parts)
+        yaml_reference = "\n\n".join(yaml_parts)
+        return doc_text, yaml_reference
 
     # ── Query classification ─────────────────────────────────────────────
 
@@ -797,27 +809,28 @@ Do NOT fabricate any specific configuration, YAML, CLI flags, or API details."""
 
     TECHNICAL_PROMPT = """You are ngrok Assistant, a senior ngrok solutions engineer helping users in Slack.
 
-You have access to a "Documentation Context" below containing excerpts from ngrok's official docs.
-Treat this context as the source of truth for ALL factual claims.
+You have access to a "Documentation Context" and an optional "YAML Reference" below.
+The Documentation Context contains excerpts from ngrok's official docs.
+The YAML Reference contains numbered YAML snippets extracted from those docs (e.g. [YAML-1], [YAML-2]).
 
 You MAY:
 - explain concepts in your own words — be clear and helpful, not robotic
 - compare features, discuss trade-offs, and recommend best practices
 
 STRICT RULES FOR CODE/CONFIG/YAML:
-- ONLY include YAML, config, CLI commands, or code snippets that appear VERBATIM in the Documentation Context
-- NEVER generate, modify, adapt, or combine YAML/config examples — copy them exactly or don't include them
-- If no relevant code/config example exists in the context, do NOT create one — instead explain the concept and link to the docs
-- NEVER invent field names, CLI flags, API parameters, or config keys
+- You MUST NOT write ANY code blocks, YAML, config, or CLI commands of your own
+- The ONLY code/YAML you may include is by copying a numbered snippet (e.g. [YAML-1]) EXACTLY as-is from the YAML Reference section
+- If no YAML Reference section exists or none of the snippets are relevant, do NOT include any code — just explain and link to the docs
+- NEVER invent, modify, adapt, or combine snippets
 
 {context_instruction}
 
 Response format:
 1. Direct answer (2-6 sentences), written naturally
-2. If a relevant YAML/config snippet exists verbatim in the docs context, include ONE — copied exactly as-is
+2. If a numbered YAML snippet from the YAML Reference is relevant, copy ONE exactly as-is
 3. Source URL(s) at the end
 
-Use prior thread conversation (if provided) to understand follow-ups and resolve references like "it", "that", etc."""
+Use prior thread conversation (if provided) to understand follow-ups."""
 
     TECHNICAL_NO_DOCS_PROMPT = """You are ngrok Assistant, a senior ngrok solutions engineer helping users in Slack.
 
@@ -858,17 +871,21 @@ Useful links: https://ngrok.com/docs, https://ngrok.com/docs/traffic-policy, htt
                 return await self._call_llm(self.TECHNICAL_NO_DOCS_PROMPT, user_content, model, temperature=0.4, max_tokens=800)
             return "I couldn't find relevant documentation for that. Could you rephrase or add more detail about what you're trying to do?"
 
-        context = self._build_doc_context(results)
+        doc_text, yaml_ref = self._build_doc_context(results)
         category = self._classify_query(question)
-        return await self._synthesize_answer(question, context, category, thread_context=thread_context, model=model)
+        return await self._synthesize_answer(question, doc_text, yaml_ref, category, thread_context=thread_context, model=model)
 
-    async def _synthesize_answer(self, question: str, doc_context: str, category: str, thread_context: str = "", model: str = "gpt-4o-mini") -> str:
+    async def _synthesize_answer(self, question: str, doc_context: str, yaml_reference: str, category: str, thread_context: str = "", model: str = "gpt-4o-mini") -> str:
         context_instruction = self._format_context_instruction(category)
         system_prompt = self.TECHNICAL_PROMPT.format(context_instruction=context_instruction)
 
         user_content = f"Question: {question}\n\nDocumentation Context:\n{doc_context}"
+        if yaml_reference:
+            user_content += f"\n\nYAML Reference (you may copy ONE of these exactly):\n{yaml_reference}"
         if thread_context:
             user_content = f"Prior conversation in thread:\n{thread_context}\n\nFollow-up question: {question}\n\nDocumentation Context:\n{doc_context}"
+            if yaml_reference:
+                user_content += f"\n\nYAML Reference (you may copy ONE of these exactly):\n{yaml_reference}"
 
         return await self._call_llm(system_prompt, user_content, model, temperature=0.3, max_tokens=1000)
 
@@ -879,7 +896,7 @@ Useful links: https://ngrok.com/docs, https://ngrok.com/docs/traffic-policy, htt
             return "Error: An LLM API key (OpenAI, Anthropic, or Gemini) is required for YAML generation."
 
         results = await self.search_docs(request, max_results=8)
-        doc_context = self._build_doc_context(results)
+        doc_text, yaml_ref = self._build_doc_context(results)
         category = self._classify_query(request)
         context_instruction = self._format_context_instruction(category)
 
@@ -894,7 +911,9 @@ RULES:
 - Never invent fields - if a field isn't in the doc examples, don't use it"""
 
         user_prompt = f"Generate an ngrok YAML configuration for: {request}"
-        if doc_context:
-            user_prompt += f"\n\nRelevant documentation:\n{doc_context}"
+        if doc_text:
+            user_prompt += f"\n\nRelevant documentation:\n{doc_text}"
+        if yaml_ref:
+            user_prompt += f"\n\nYAML Reference:\n{yaml_ref}"
 
         return await self._call_llm(system_prompt, user_prompt, model, temperature=0.2, max_tokens=1500)
