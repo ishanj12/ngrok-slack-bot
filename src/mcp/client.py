@@ -332,7 +332,7 @@ class NgrokMCPClient:
         results = []
         for q in queries:
             try:
-                raw = await self.call_tool("SearchNgrokDocumentation", {"query": q})
+                raw = await self.call_tool("search_ngrok_documentation", {"query": q})
                 for r in self._parse_search_results(raw, max_results):
                     link = r.get("link", "")
                     if link not in seen_links:
