@@ -294,7 +294,7 @@ class NgrokMCPClient:
         if wants_k8s:
             k8s_docs = await self._fetch_k8s_docs(query)
 
-        search_queries = self._build_search_queries(query, wants_k8s=wants_k8s)
+        search_queries = await self._generate_search_queries(query, wants_k8s=wants_k8s)
         results = await self._run_search_queries(search_queries, max_results)
 
         if action_doc:
@@ -404,7 +404,40 @@ class NgrokMCPClient:
 
         return best_slug
 
-    def _build_search_queries(self, query: str, wants_k8s: bool = False) -> list[str]:
+    QUERY_GEN_PROMPT = """Generate 3-5 concise search queries to find relevant ngrok documentation for the user's question.
+Think about: what doc pages would have the answer? What terms would those pages use?
+Include at least one query targeting configuration/setup examples if the user is asking how to do something.
+
+Respond with ONLY the queries, one per line. No numbering, no explanation."""
+
+    async def _generate_search_queries(self, query: str, wants_k8s: bool = False) -> list[str]:
+        """Use the LLM to generate intelligent search queries."""
+        keywords = self._extract_keywords(query)
+        fallback = [keywords, query] if keywords != query else [keywords]
+
+        if not self._has_any_llm():
+            return self._build_search_queries_static(query, wants_k8s)
+
+        try:
+            user_content = f"User question: {query}"
+            if wants_k8s:
+                user_content += "\nContext: The user is asking about ngrok on Kubernetes."
+            raw = await self._call_llm(self.QUERY_GEN_PROMPT, user_content, "gpt-4o-mini", temperature=0, max_tokens=200)
+            queries = [line.strip() for line in raw.strip().split('\n') if line.strip()]
+            if queries:
+                queries.extend(fallback)
+                slug = self._detect_action_slug(query)
+                if slug:
+                    queries.append(f"{slug} action")
+                seen: set[str] = set()
+                return [q for q in queries if q not in seen and not seen.add(q)]
+        except Exception:
+            pass
+
+        return self._build_search_queries_static(query, wants_k8s)
+
+    def _build_search_queries_static(self, query: str, wants_k8s: bool = False) -> list[str]:
+        """Fallback static query builder when LLM is unavailable."""
         keywords = self._extract_keywords(query)
         queries: list[str] = []
 
@@ -412,13 +445,7 @@ class NgrokMCPClient:
             queries.extend([
                 f"{keywords} kubernetes",
                 f"{keywords} k8s",
-                f"{keywords} AgentEndpoint",
-                f"{keywords} CloudEndpoint",
                 "ngrok kubernetes operator",
-                "AgentEndpoint CRD",
-                "CloudEndpoint CRD",
-                f"{keywords} ingress",
-                f"{keywords} helm",
             ])
 
         queries.append(keywords)
@@ -428,20 +455,10 @@ class NgrokMCPClient:
         slug = self._detect_action_slug(query)
         if slug:
             queries.append(f"{slug} action")
-            queries.append(slug)
             queries.append(f"{slug} traffic policy")
 
-        if not wants_k8s:
-            queries.append(f"{keywords} traffic policy action")
-
         seen: set[str] = set()
-        deduped: list[str] = []
-        for q in queries:
-            q = q.strip()
-            if q and q not in seen:
-                seen.add(q)
-                deduped.append(q)
-        return deduped
+        return [q for q in queries if q.strip() and q not in seen and not seen.add(q)]
 
     def _is_k8s_doc(self, result: dict) -> bool:
         title = result.get("title", "").lower()
@@ -655,7 +672,7 @@ class NgrokMCPClient:
         return "openai"
 
     def _has_any_llm(self) -> bool:
-        return (
+        return bool(
             (HAS_OPENAI and (os.environ.get("OPENAI_API_KEY") or os.environ.get("NGROK_API_KEY")))
             or (HAS_ANTHROPIC and os.environ.get("ANTHROPIC_API_KEY"))
             or (HAS_GEMINI and os.environ.get("GEMINI_API_KEY"))
@@ -887,28 +904,7 @@ Useful links: https://ngrok.com/docs, https://ngrok.com/docs/traffic-policy, htt
             if yaml_reference:
                 user_content += f"\n\nYAML Reference (you may copy ONE of these exactly):\n{yaml_reference}"
 
-        answer = await self._call_llm(system_prompt, user_content, model, temperature=0.3, max_tokens=1000)
-        return self._strip_hallucinated_code(answer, yaml_reference)
-
-    def _strip_hallucinated_code(self, answer: str, yaml_reference: str) -> str:
-        """Remove any code blocks from the answer that aren't in the YAML reference."""
-        if not re.search(r'```', answer):
-            return answer
-
-        allowed_blocks: set[str] = set()
-        if yaml_reference:
-            for block in re.findall(r'```ya?ml\n(.*?)```', yaml_reference, re.DOTALL):
-                allowed_blocks.add(block.strip())
-
-        def check_block(match: re.Match) -> str:
-            block_content = match.group(1).strip()
-            if block_content in allowed_blocks:
-                return match.group(0)
-            return ""
-
-        cleaned = re.sub(r'```[^\n]*\n(.*?)```', check_block, answer, flags=re.DOTALL)
-        cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
-        return cleaned.strip()
+        return await self._call_llm(system_prompt, user_content, model, temperature=0.3, max_tokens=1000)
 
     # ── YAML generation ───────────────────────────────────────────────────
 
