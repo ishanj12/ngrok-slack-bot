@@ -522,43 +522,6 @@ Output ONLY the queries, one per line."""
 
         return score
 
-    # ── Smart page fetch ─────────────────────────────────────────────────
-
-    PAGE_PICK_PROMPT = """Given this user question about ngrok, suggest ONE documentation page path that would have configuration examples or YAML snippets to answer it.
-Reply with ONLY the page path (e.g. "agent/config/v3" or "traffic-policy/actions/rate-limit"). No explanation."""
-
-    async def _fetch_relevant_page(self, question: str) -> dict | None:
-        """Use LLM to pick a doc page, then fetch it via MCP get_page tool."""
-        if not self._has_any_llm():
-            return None
-        try:
-            page_path = await self._call_llm(
-                self.PAGE_PICK_PROMPT, f"Question: {question}", "gpt-4o-mini",
-                temperature=0, max_tokens=50,
-            )
-            page_path = page_path.strip().strip('"').strip("'")
-            if not page_path or " " in page_path or len(page_path) > 100:
-                return None
-
-            raw = await self.call_tool("get_page_ngrok_documentation", {"page": page_path})
-            text = str(raw)
-            if not text or "not found" in text.lower():
-                return None
-
-            yaml_blocks = self._extract_yaml_blocks(text)
-            if not yaml_blocks:
-                return None
-
-            return {
-                "title": page_path.split("/")[-1].replace("-", " ").title(),
-                "link": f"https://ngrok.com/docs/{page_path}",
-                "content": text[:500],
-                "full_content": text[:4000],
-                "yaml_examples": yaml_blocks,
-            }
-        except Exception:
-            return None
-
     # ── Page enrichment ───────────────────────────────────────────────────
 
     async def _fetch_doc_page(self, url: str) -> str | None:
@@ -576,17 +539,19 @@ Reply with ONLY the page path (e.g. "agent/config/v3" or "traffic-policy/actions
         return re.findall(r'```ya?ml[^\n]*\n(.*?)```', markdown, re.DOTALL)
 
     async def _enrich_results(self, results: list[dict]) -> list[dict]:
-        for r in results:
+        async def _enrich_one(r: dict) -> None:
             link = r.get("link", "")
             if not link:
-                continue
+                return
             page = await self._fetch_doc_page(link)
             if not page:
-                continue
+                return
             yaml_blocks = self._extract_yaml_blocks(page)
             if yaml_blocks:
                 r["yaml_examples"] = yaml_blocks
             r["full_content"] = page[:4000]
+
+        await asyncio.gather(*[_enrich_one(r) for r in results])
         return results
 
     # ── Parse MCP response ────────────────────────────────────────────────
@@ -861,20 +826,30 @@ Reply with ONLY the page path (e.g. "agent/config/v3" or "traffic-policy/actions
 The user may be greeting you, thanking you, or asking what you can do.
 Respond naturally, briefly, and warmly. Offer 2-3 example questions you can help with.
 
-You specialize in: tunnels, endpoints, traffic policy, authentication, Kubernetes, the ngrok API, and more.
-Do NOT fabricate any specific configuration, YAML, CLI flags, or API details."""
+You specialize in: tunnels, endpoints, traffic policy, authentication, Kubernetes, the ngrok API, and more."""
 
-    TECHNICAL_PROMPT = """You are ngrok Assistant, a senior ngrok solutions engineer helping users in Slack.
+    TECHNICAL_WITH_EXAMPLES_PROMPT = """You are ngrok Assistant, a senior ngrok solutions engineer helping users in Slack.
 
-You have "Documentation Context" below with excerpts from ngrok's official docs. Use this as your source of truth.
+Documentation Context below contains excerpts from ngrok's official docs, followed by numbered [YAML-N] examples extracted from those pages.
 
 {context_instruction}
 
 Guidelines:
-- Answer naturally and helpfully — explain concepts, give context, compare approaches
-- When the docs contain YAML/config examples, include the most relevant one from the context
-- Do NOT generate YAML/config/CLI commands that aren't in the Documentation Context — ngrok's config format changes frequently and your training data may be outdated
-- If the docs don't have a specific example, explain the concept and point to the doc links
+- Be concise — Slack users want quick, clear answers
+- Use the most relevant [YAML-N] example to illustrate your answer. Copy it verbatim or adapt values, but keep the structure and fields exactly as shown.
+- Explain what the example does and how to adapt it
+- Use prior thread conversation (if provided) to understand follow-ups"""
+
+    TECHNICAL_EXPLAIN_PROMPT = """You are ngrok Assistant, a senior ngrok solutions engineer helping users in Slack.
+
+Documentation Context below contains excerpts from ngrok's official docs.
+
+{context_instruction}
+
+Guidelines:
+- Be concise — Slack users want quick, clear answers
+- Explain the concept clearly in plain text
+- Point the user to the relevant documentation links for implementation details and up-to-date examples
 - Use prior thread conversation (if provided) to understand follow-ups"""
 
     TECHNICAL_NO_DOCS_PROMPT = """You are ngrok Assistant, a senior ngrok solutions engineer helping users in Slack.
@@ -882,9 +857,8 @@ Guidelines:
 You couldn't find specific documentation for this question.
 
 Guidelines:
-- Explain what you can about the topic at a high level
-- Do NOT generate any YAML, config, or CLI examples — ngrok's syntax changes frequently and your training data may be outdated
-- Point them to https://ngrok.com/docs for the latest information
+- Explain the concept at a high level in plain text
+- Point them to https://ngrok.com/docs for up-to-date details
 - Ask 1-2 clarifying questions if the question is vague"""
 
     # ── Ask ────────────────────────────────────────────────────────────────
@@ -917,12 +891,6 @@ Guidelines:
                 return await self._call_llm(self.TECHNICAL_NO_DOCS_PROMPT, user_content, model, temperature=0.4, max_tokens=800)
             return "I couldn't find relevant documentation for that. Could you rephrase or add more detail about what you're trying to do?"
 
-        has_yaml = any(r.get("yaml_examples") for r in results)
-        if not has_yaml:
-            extra = await self._fetch_relevant_page(question)
-            if extra:
-                results.append(extra)
-
         doc_text, yaml_ref = self._build_doc_context(results)
         category = self._classify_query(question)
         doc_links = [r.get("link") for r in results if r.get("link")]
@@ -932,15 +900,19 @@ Guidelines:
 
     async def _synthesize_answer(self, question: str, doc_context: str, yaml_reference: str, category: str, thread_context: str = "", model: str = "gpt-4o-mini") -> str:
         context_instruction = self._format_context_instruction(category)
-        system_prompt = self.TECHNICAL_PROMPT.format(context_instruction=context_instruction)
 
-        user_content = f"Question: {question}\n\nDocumentation Context:\n{doc_context}"
         if yaml_reference:
-            user_content += f"\n\nYAML examples from the docs:\n{yaml_reference}"
+            system_prompt = self.TECHNICAL_WITH_EXAMPLES_PROMPT.format(context_instruction=context_instruction)
+        else:
+            system_prompt = self.TECHNICAL_EXPLAIN_PROMPT.format(context_instruction=context_instruction)
+
         if thread_context:
             user_content = f"Prior conversation in thread:\n{thread_context}\n\nFollow-up question: {question}\n\nDocumentation Context:\n{doc_context}"
-            if yaml_reference:
-                user_content += f"\n\nYAML examples from the docs:\n{yaml_reference}"
+        else:
+            user_content = f"Question: {question}\n\nDocumentation Context:\n{doc_context}"
+
+        if yaml_reference:
+            user_content += f"\n\nYAML examples from the docs:\n{yaml_reference}"
 
         return await self._call_llm(system_prompt, user_content, model, temperature=0.3, max_tokens=1000)
 
