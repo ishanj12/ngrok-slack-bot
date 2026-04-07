@@ -157,24 +157,29 @@ class NgrokMCPClient:
     @classmethod
     async def disconnect(cls) -> None:
         """Disconnect the shared singleton from the ngrok MCP server."""
-        if not cls._cls_connected:
-            return
-
-        try:
-            if cls._cls_session_context:
-                await cls._cls_session_context.__aexit__(None, None, None)
-        except Exception:
-            pass
-        try:
-            if cls._cls_transport_context:
-                await cls._cls_transport_context.__aexit__(None, None, None)
-        except Exception:
-            pass
-
+        # Reset state first to prevent re-use of broken connection
         cls._cls_session = None
         cls._cls_connected = False
         if cls._instance is not None:
             cls._instance._session = None
+
+        # Best-effort cleanup — these may fail with RuntimeError when
+        # called from a different task than the one that opened them
+        session_ctx = cls._cls_session_context
+        transport_ctx = cls._cls_transport_context
+        cls._cls_session_context = None
+        cls._cls_transport_context = None
+
+        try:
+            if session_ctx:
+                await session_ctx.__aexit__(None, None, None)
+        except (Exception, BaseException):
+            pass
+        try:
+            if transport_ctx:
+                await transport_ctx.__aexit__(None, None, None)
+        except (Exception, BaseException):
+            pass
 
     @property
     def session(self) -> ClientSession:
