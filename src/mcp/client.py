@@ -517,6 +517,43 @@ Output ONLY the queries, one per line."""
 
         return score
 
+    # ── Smart page fetch ─────────────────────────────────────────────────
+
+    PAGE_PICK_PROMPT = """Given this user question about ngrok, suggest ONE documentation page path that would have configuration examples or YAML snippets to answer it.
+Reply with ONLY the page path (e.g. "agent/config/v3" or "traffic-policy/actions/rate-limit"). No explanation."""
+
+    async def _fetch_relevant_page(self, question: str) -> dict | None:
+        """Use LLM to pick a doc page, then fetch it via MCP get_page tool."""
+        if not self._has_any_llm():
+            return None
+        try:
+            page_path = await self._call_llm(
+                self.PAGE_PICK_PROMPT, f"Question: {question}", "gpt-4o-mini",
+                temperature=0, max_tokens=50,
+            )
+            page_path = page_path.strip().strip('"').strip("'")
+            if not page_path or " " in page_path or len(page_path) > 100:
+                return None
+
+            raw = await self.call_tool("get_page_ngrok_documentation", {"page": page_path})
+            text = str(raw)
+            if not text or "not found" in text.lower():
+                return None
+
+            yaml_blocks = self._extract_yaml_blocks(text)
+            if not yaml_blocks:
+                return None
+
+            return {
+                "title": page_path.split("/")[-1].replace("-", " ").title(),
+                "link": f"https://ngrok.com/docs/{page_path}",
+                "content": text[:500],
+                "full_content": text[:4000],
+                "yaml_examples": yaml_blocks,
+            }
+        except Exception:
+            return None
+
     # ── Page enrichment ───────────────────────────────────────────────────
 
     async def _fetch_doc_page(self, url: str) -> str | None:
@@ -824,26 +861,26 @@ Do NOT fabricate any specific configuration, YAML, CLI flags, or API details."""
 
     TECHNICAL_PROMPT = """You are ngrok Assistant, a senior ngrok solutions engineer helping users in Slack.
 
-You have "Documentation Context" below with excerpts from ngrok's official docs. Use this as your primary source of truth, but you may also draw on your general knowledge of ngrok to give complete, helpful answers — just like a knowledgeable engineer would.
+You have "Documentation Context" below with excerpts from ngrok's official docs. Use this as your source of truth.
 
 {context_instruction}
 
 Guidelines:
 - Answer naturally and helpfully — explain concepts, give context, compare approaches
-- When the docs contain relevant YAML/config examples, prefer those over generating your own
-- When the docs don't have an example but you know the correct syntax, you may provide one — just keep it accurate
-- If you're unsure about something specific, say so
+- When the docs contain YAML/config examples, include the most relevant one from the context
+- Do NOT generate YAML/config/CLI commands that aren't in the Documentation Context — ngrok's config format changes frequently and your training data may be outdated
+- If the docs don't have a specific example, explain the concept and point to the doc links
 - Use prior thread conversation (if provided) to understand follow-ups"""
 
     TECHNICAL_NO_DOCS_PROMPT = """You are ngrok Assistant, a senior ngrok solutions engineer helping users in Slack.
 
-You couldn't find specific documentation for this question, but you may use your general knowledge of ngrok to help.
+You couldn't find specific documentation for this question.
 
 Guidelines:
-- Answer as helpfully as you can based on what you know about ngrok
-- If you provide config/YAML examples from memory, note that the user should verify against the official docs
-- If you're genuinely unsure, say so and suggest where to look
-- Ask clarifying questions if the question is too vague to answer well"""
+- Explain what you can about the topic at a high level
+- Do NOT generate any YAML, config, or CLI examples — ngrok's syntax changes frequently and your training data may be outdated
+- Point them to https://ngrok.com/docs for the latest information
+- Ask 1-2 clarifying questions if the question is vague"""
 
     # ── Ask ────────────────────────────────────────────────────────────────
 
@@ -874,6 +911,12 @@ Guidelines:
                     user_content = f"Prior conversation:\n{thread_context}\n\nFollow-up: {question}"
                 return await self._call_llm(self.TECHNICAL_NO_DOCS_PROMPT, user_content, model, temperature=0.4, max_tokens=800)
             return "I couldn't find relevant documentation for that. Could you rephrase or add more detail about what you're trying to do?"
+
+        has_yaml = any(r.get("yaml_examples") for r in results)
+        if not has_yaml:
+            extra = await self._fetch_relevant_page(question)
+            if extra:
+                results.append(extra)
 
         doc_text, yaml_ref = self._build_doc_context(results)
         category = self._classify_query(question)
