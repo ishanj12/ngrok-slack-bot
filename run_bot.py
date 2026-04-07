@@ -74,7 +74,7 @@ def cleanup():
 def main():
     """Main entry point for the bot"""
     print("=" * 60)
-    print("🤖 ngrok Slack Bot - Documentation Assistant")
+    print("🤖 ngrok Slack Bot - Documentation Assistant (v2)")
     print("=" * 60)
     
     if not check_environment():
