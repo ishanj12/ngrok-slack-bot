@@ -290,41 +290,41 @@ class NgrokMCPClient:
         query_lower = query.lower()
         wants_k8s = any(kw in query_lower for kw in ["kubernetes", "k8s", "ingress", "operator", "crd", "helm"])
 
-        action_slug = self._detect_action_slug(query)
-        action_doc = None
-        if action_slug:
-            action_doc = await self._fetch_action_doc(action_slug)
-
-        k8s_docs: list[dict] = []
-        if wants_k8s:
-            k8s_docs = await self._fetch_k8s_docs(query)
-
+        # Run action/k8s doc fetches in parallel with MCP search
         search_queries = self._build_search_queries(query, wants_k8s=wants_k8s)
-        results = await self._run_search_queries(search_queries, max_results)
+        tasks: list[asyncio.Task] = []
 
-        if action_doc:
+        action_slug = self._detect_action_slug(query)
+        if action_slug:
+            tasks.append(asyncio.ensure_future(self._fetch_action_doc(action_slug)))
+        if wants_k8s:
+            tasks.append(asyncio.ensure_future(self._fetch_k8s_docs(query)))
+
+        search_task = asyncio.ensure_future(self._run_search_queries(search_queries, max_results))
+        tasks.append(search_task)
+
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+        results = search_task.result() if not isinstance(search_task.result(), Exception) else []
+
+        # Merge action doc
+        if action_slug and tasks[0].result() and not isinstance(tasks[0].result(), Exception):
+            action_doc = tasks[0].result()
             results = [action_doc] + [r for r in results if r.get("link") != action_doc["link"]]
 
-        if k8s_docs:
-            k8s_links = {d["link"] for d in k8s_docs}
-            results = k8s_docs + [r for r in results if r.get("link") not in k8s_links]
+        # Merge k8s docs
+        if wants_k8s:
+            k8s_task = tasks[1] if action_slug else tasks[0]
+            k8s_docs = k8s_task.result() if not isinstance(k8s_task.result(), Exception) else []
+            if k8s_docs:
+                k8s_links = {d["link"] for d in k8s_docs}
+                results = k8s_docs + [r for r in results if r.get("link") not in k8s_links]
 
+        # Filter out k8s results when not asked for k8s
         if not wants_k8s:
             non_k8s = [r for r in results if not self._is_k8s_doc(r)]
             if non_k8s:
                 results = non_k8s
-            else:
-                keywords = self._extract_keywords(query)
-                keyword_list = keywords.split()
-                retry_queries = [f"{keywords} action"]
-                if len(keyword_list) > 1:
-                    for word in keyword_list:
-                        retry_queries.append(f"{word} action")
-                retry_queries.append(keywords)
-                retry_results = await self._run_search_queries(retry_queries, max_results)
-                retry_non_k8s = [r for r in retry_results if not self._is_k8s_doc(r)]
-                if retry_non_k8s:
-                    results = retry_non_k8s
 
         results.sort(key=lambda r: self._score_result(r, query, wants_k8s=wants_k8s), reverse=True)
         results = results[:max_results]
@@ -332,21 +332,24 @@ class NgrokMCPClient:
         return results
 
     async def _run_search_queries(self, queries: list[str], max_results: int) -> list[dict]:
-        """Run a list of search queries and return deduplicated results."""
-        seen_links: set[str] = set()
-        results = []
-        for q in queries:
+        """Run search queries in parallel and return deduplicated results."""
+        async def _single_search(q: str) -> list[dict]:
             try:
                 raw = await self.call_tool("search_ngrok_documentation", {"query": q})
-                for r in self._parse_search_results(raw, max_results):
-                    link = r.get("link", "")
-                    if link not in seen_links:
-                        seen_links.add(link)
-                        results.append(r)
+                return self._parse_search_results(raw, max_results)
             except Exception:
-                continue
-            if len(results) >= max_results * 2:
-                break
+                return []
+
+        all_results = await asyncio.gather(*[_single_search(q) for q in queries])
+
+        seen_links: set[str] = set()
+        results = []
+        for batch in all_results:
+            for r in batch:
+                link = r.get("link", "")
+                if link not in seen_links:
+                    seen_links.add(link)
+                    results.append(r)
         return results
 
     TRAFFIC_POLICY_ACTIONS: dict[str, list[str]] = {
@@ -838,7 +841,7 @@ Guidelines:
 
     # ── Ask ────────────────────────────────────────────────────────────────
 
-    async def ask(self, question: str, max_results: int = 8, thread_context: str = "", model: str = "gpt-4o-mini") -> str:
+    async def ask(self, question: str, max_results: int = 3, thread_context: str = "", model: str = "gpt-4o-mini") -> str:
         intent = self._detect_intent(question, thread_context)
 
         if intent == "conversational":
