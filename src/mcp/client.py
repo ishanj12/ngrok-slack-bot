@@ -299,7 +299,7 @@ class NgrokMCPClient:
         if wants_k8s:
             k8s_docs = await self._fetch_k8s_docs(query)
 
-        search_queries = await self._generate_search_queries(query, wants_k8s=wants_k8s)
+        search_queries = self._build_search_queries(query, wants_k8s=wants_k8s)
         results = await self._run_search_queries(search_queries, max_results)
 
         if action_doc:
@@ -409,38 +409,8 @@ class NgrokMCPClient:
 
         return best_slug
 
-    QUERY_GEN_PROMPT = """Generate exactly 3 short search queries to find ngrok documentation for this question.
-Include one query for conceptual docs and one for configuration/example docs.
-Output ONLY the queries, one per line."""
-
-    async def _generate_search_queries(self, query: str, wants_k8s: bool = False) -> list[str]:
-        """Use the LLM to generate intelligent search queries."""
-        keywords = self._extract_keywords(query)
-        fallback = [keywords, query] if keywords != query else [keywords]
-
-        if not self._has_any_llm():
-            return self._build_search_queries_static(query, wants_k8s)
-
-        try:
-            user_content = f"User question: {query}"
-            if wants_k8s:
-                user_content += "\nContext: The user is asking about ngrok on Kubernetes."
-            raw = await self._call_llm(self.QUERY_GEN_PROMPT, user_content, "gpt-4o-mini", temperature=0, max_tokens=100)
-            queries = [line.strip() for line in raw.strip().split('\n') if line.strip()]
-            if queries:
-                queries.extend(fallback)
-                slug = self._detect_action_slug(query)
-                if slug:
-                    queries.append(f"{slug} action")
-                seen: set[str] = set()
-                return [q for q in queries if q not in seen and not seen.add(q)]
-        except Exception:
-            pass
-
-        return self._build_search_queries_static(query, wants_k8s)
-
-    def _build_search_queries_static(self, query: str, wants_k8s: bool = False) -> list[str]:
-        """Fallback static query builder when LLM is unavailable."""
+    def _build_search_queries(self, query: str, wants_k8s: bool = False) -> list[str]:
+        """Build search queries from the user's question using keyword extraction."""
         keywords = self._extract_keywords(query)
         queries: list[str] = []
 
