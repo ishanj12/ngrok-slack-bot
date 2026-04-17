@@ -539,19 +539,25 @@ Output ONLY the queries, one per line."""
         return re.findall(r'```ya?ml[^\n]*\n(.*?)```', markdown, re.DOTALL)
 
     async def _enrich_results(self, results: list[dict]) -> list[dict]:
-        async def _enrich_one(r: dict) -> None:
+        async def _enrich_one(r: dict, http: httpx.AsyncClient) -> None:
             link = r.get("link", "")
             if not link:
                 return
-            page = await self._fetch_doc_page(link)
-            if not page:
+            md_url = link.rstrip("/") + ".md"
+            try:
+                resp = await http.get(md_url, follow_redirects=True)
+                if resp.status_code != 200:
+                    return
+                page = resp.text
+            except Exception:
                 return
             yaml_blocks = self._extract_yaml_blocks(page)
             if yaml_blocks:
                 r["yaml_examples"] = yaml_blocks
             r["full_content"] = page[:4000]
 
-        await asyncio.gather(*[_enrich_one(r) for r in results])
+        async with httpx.AsyncClient(timeout=10) as http:
+            await asyncio.gather(*[_enrich_one(r, http) for r in results])
         return results
 
     # ── Parse MCP response ────────────────────────────────────────────────
