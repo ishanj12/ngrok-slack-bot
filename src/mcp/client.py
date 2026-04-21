@@ -292,33 +292,29 @@ class NgrokMCPClient:
 
         # Run action/k8s doc fetches in parallel with MCP search
         search_queries = self._build_search_queries(query, wants_k8s=wants_k8s)
-        tasks: list[asyncio.Task] = []
+        coros = {}
 
         action_slug = self._detect_action_slug(query)
         if action_slug:
-            tasks.append(asyncio.ensure_future(self._fetch_action_doc(action_slug)))
+            coros["action"] = self._fetch_action_doc(action_slug)
         if wants_k8s:
-            tasks.append(asyncio.ensure_future(self._fetch_k8s_docs(query)))
+            coros["k8s"] = self._fetch_k8s_docs(query)
+        coros["search"] = self._run_search_queries(search_queries, max_results)
 
-        search_task = asyncio.ensure_future(self._run_search_queries(search_queries, max_results))
-        tasks.append(search_task)
+        keys = list(coros.keys())
+        raw = await asyncio.gather(*coros.values(), return_exceptions=True)
+        parallel = dict(zip(keys, raw))
 
-        await asyncio.gather(*tasks, return_exceptions=True)
+        results = parallel.get("search", []) if not isinstance(parallel.get("search"), Exception) else []
 
-        results = search_task.result() if not isinstance(search_task.result(), Exception) else []
-
-        # Merge action doc
-        if action_slug and tasks[0].result() and not isinstance(tasks[0].result(), Exception):
-            action_doc = tasks[0].result()
+        action_doc = parallel.get("action")
+        if action_doc and not isinstance(action_doc, Exception):
             results = [action_doc] + [r for r in results if r.get("link") != action_doc["link"]]
 
-        # Merge k8s docs
-        if wants_k8s:
-            k8s_task = tasks[1] if action_slug else tasks[0]
-            k8s_docs = k8s_task.result() if not isinstance(k8s_task.result(), Exception) else []
-            if k8s_docs:
-                k8s_links = {d["link"] for d in k8s_docs}
-                results = k8s_docs + [r for r in results if r.get("link") not in k8s_links]
+        k8s_docs = parallel.get("k8s", [])
+        if k8s_docs and not isinstance(k8s_docs, Exception):
+            k8s_links = {d["link"] for d in k8s_docs}
+            results = k8s_docs + [r for r in results if r.get("link") not in k8s_links]
 
         # Filter out k8s results when not asked for k8s
         if not wants_k8s:
