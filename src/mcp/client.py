@@ -580,15 +580,9 @@ class NgrokMCPClient:
 
     # ── Context building ──────────────────────────────────────────────────
 
-    def _build_doc_context(self, results: list[dict]) -> tuple[str, str]:
-        """Build doc context and a separate numbered YAML reference section.
-
-        Returns (doc_text, yaml_reference).  yaml_reference is empty when
-        there are no YAML examples.
-        """
+    def _build_doc_context(self, results: list[dict]) -> str:
+        """Build doc context text from search results (no YAML — that's appended programmatically)."""
         context_parts = []
-        yaml_parts = []
-        yaml_idx = 0
         for i, r in enumerate(results, 1):
             part = f"[{i}] {r.get('title', 'Doc')}\n"
             if r.get('link'):
@@ -596,16 +590,16 @@ class NgrokMCPClient:
             content = r.get('full_content') or r.get('content', '')
             part += content
             context_parts.append(part)
-            if r.get('yaml_examples'):
-                for yaml_block in r['yaml_examples']:
-                    yaml_idx += 1
-                    yaml_parts.append(
-                        f"[YAML-{yaml_idx}] (from [{i}] {r.get('title', 'Doc')})\n"
-                        f"```yaml\n{yaml_block.strip()}\n```"
-                    )
-        doc_text = "\n\n---\n\n".join(context_parts)
-        yaml_reference = "\n\n".join(yaml_parts)
-        return doc_text, yaml_reference
+        return "\n\n---\n\n".join(context_parts)
+
+    @staticmethod
+    def _pick_best_yaml(results: list[dict]) -> str | None:
+        """Pick the first YAML example from the highest-scored result that has one."""
+        for r in results:
+            examples = r.get("yaml_examples", [])
+            if examples:
+                return examples[0].strip()
+        return None
 
     # ── Query classification ─────────────────────────────────────────────
 
@@ -624,23 +618,10 @@ class NgrokMCPClient:
 
     def _format_context_instruction(self, category: str) -> str:
         if category == "kubernetes":
-            return (
-                "The user is asking about Kubernetes / k8s. "
-                "Use Kubernetes-specific examples (kind:, apiVersion:, AgentEndpoint, CloudEndpoint CRDs) from the documentation. "
-                "Do NOT show ngrok agent config YAML (version: 3, endpoints:) unless the user asks for it."
-            )
+            return "The user is asking about Kubernetes / k8s."
         if category == "api":
-            return (
-                "The user is asking about the ngrok API. "
-                "Use API examples (curl, REST endpoints) from the documentation. "
-                "Do NOT show Kubernetes CRD YAML or ngrok agent config YAML unless the user asks for it."
-            )
-        return (
-            "The user is asking about the ngrok agent / CLI. "
-            "Use ngrok agent configuration examples (version: 3, endpoints:, traffic_policy:) from the documentation. "
-            "Do NOT show Kubernetes examples (kind:, apiVersion:, AgentEndpoint, CloudEndpoint, metadata:, namespace:) "
-            "even if they appear in the documentation context. The user did not ask about Kubernetes."
-        )
+            return "The user is asking about the ngrok API."
+        return "The user is asking about the ngrok agent / CLI."
 
     # ── Provider detection ────────────────────────────────────────────────
 
@@ -803,19 +784,7 @@ Respond naturally, briefly, and warmly. Offer 2-3 example questions you can help
 
 You specialize in: tunnels, endpoints, traffic policy, authentication, Kubernetes, the ngrok API, and more."""
 
-    TECHNICAL_WITH_EXAMPLES_PROMPT = """You are ngrok Assistant, a senior ngrok solutions engineer helping users in Slack.
-
-Documentation Context below contains excerpts from ngrok's official docs, followed by numbered [YAML-N] examples extracted from those pages.
-
-{context_instruction}
-
-Guidelines:
-- Be concise — Slack users want quick, clear answers
-- Include the most relevant [YAML-N] example exactly as it appears. Only change placeholder values (like domain names or ports) — never add, remove, or rename fields.
-- Briefly explain what the example does
-- Use prior thread conversation (if provided) to understand follow-ups"""
-
-    TECHNICAL_EXPLAIN_PROMPT = """You are ngrok Assistant, a senior ngrok solutions engineer helping users in Slack.
+    TECHNICAL_PROMPT = """You are ngrok Assistant, a senior ngrok solutions engineer helping users in Slack.
 
 Documentation Context below contains excerpts from ngrok's official docs.
 
@@ -823,7 +792,7 @@ Documentation Context below contains excerpts from ngrok's official docs.
 
 Guidelines:
 - Answer in 2-3 concise sentences explaining the concept
-- Point the user to the specific documentation page where they can find current configuration details and examples
+- Point the user to the specific documentation page where they can find current details and examples
 - Use prior thread conversation (if provided) to understand follow-ups"""
 
     TECHNICAL_NO_DOCS_PROMPT = """You are ngrok Assistant, a senior ngrok solutions engineer helping users in Slack.
@@ -865,28 +834,26 @@ Guidelines:
                 return await self._call_llm(self.TECHNICAL_NO_DOCS_PROMPT, user_content, model, temperature=0.4, max_tokens=800)
             return "I couldn't find relevant documentation for that. Could you rephrase or add more detail about what you're trying to do?"
 
-        doc_text, yaml_ref = self._build_doc_context(results)
+        doc_text = self._build_doc_context(results)
         category = self._classify_query(question)
         doc_links = [r.get("link") for r in results if r.get("link")]
+        best_yaml = self._pick_best_yaml(results)
 
-        answer = await self._synthesize_answer(question, doc_text, yaml_ref, category, thread_context=thread_context, model=model)
+        answer = await self._synthesize_answer(question, doc_text, category, thread_context=thread_context, model=model)
+
+        if best_yaml:
+            answer = answer.rstrip() + f"\n\n```\n{best_yaml}\n```"
+
         return self._append_sources(answer, doc_links)
 
-    async def _synthesize_answer(self, question: str, doc_context: str, yaml_reference: str, category: str, thread_context: str = "", model: str = "gpt-4o-mini") -> str:
+    async def _synthesize_answer(self, question: str, doc_context: str, category: str, thread_context: str = "", model: str = "gpt-4o-mini") -> str:
         context_instruction = self._format_context_instruction(category)
-
-        if yaml_reference:
-            system_prompt = self.TECHNICAL_WITH_EXAMPLES_PROMPT.format(context_instruction=context_instruction)
-        else:
-            system_prompt = self.TECHNICAL_EXPLAIN_PROMPT.format(context_instruction=context_instruction)
+        system_prompt = self.TECHNICAL_PROMPT.format(context_instruction=context_instruction)
 
         if thread_context:
             user_content = f"Prior conversation in thread:\n{thread_context}\n\nFollow-up question: {question}\n\nDocumentation Context:\n{doc_context}"
         else:
             user_content = f"Question: {question}\n\nDocumentation Context:\n{doc_context}"
-
-        if yaml_reference:
-            user_content += f"\n\nYAML examples from the docs:\n{yaml_reference}"
 
         return await self._call_llm(system_prompt, user_content, model, temperature=0.3, max_tokens=1000)
 
@@ -910,25 +877,20 @@ Guidelines:
         if not self._has_any_llm():
             return "Error: An LLM API key (OpenAI, Anthropic, or Gemini) is required for YAML generation."
 
-        results = await self.search_docs(request, max_results=8)
-        doc_text, yaml_ref = self._build_doc_context(results)
-        category = self._classify_query(request)
-        context_instruction = self._format_context_instruction(category)
+        results = await self.search_docs(request, max_results=3)
+        doc_text = self._build_doc_context(results)
+        best_yaml = self._pick_best_yaml(results)
 
-        system_prompt = f"""You generate ngrok YAML configurations by adapting examples from the documentation provided below. Do not use any prior knowledge about ngrok.
+        system_prompt = """You explain ngrok configurations. Given documentation context below, explain how to configure what the user is asking for in 2-3 sentences. Point to the relevant doc page for details."""
 
-CONTEXT: {context_instruction}
-
-RULES:
-- Find YAML examples in the documentation that match the correct context (see above) and adapt them to the user's request
-- ONLY use fields and syntax that appear in the documentation examples
-- If the docs contain no relevant YAML examples for this topic, say "The documentation doesn't include a YAML example for this. Check https://ngrok.com/docs" and summarize what the docs say instead
-- Never invent fields - if a field isn't in the doc examples, don't use it"""
-
-        user_prompt = f"Generate an ngrok YAML configuration for: {request}"
+        user_prompt = f"How do I configure: {request}"
         if doc_text:
             user_prompt += f"\n\nRelevant documentation:\n{doc_text}"
-        if yaml_ref:
-            user_prompt += f"\n\nYAML Reference:\n{yaml_ref}"
 
-        return await self._call_llm(system_prompt, user_prompt, model, temperature=0.2, max_tokens=1500)
+        answer = await self._call_llm(system_prompt, user_prompt, model, temperature=0.2, max_tokens=500)
+
+        if best_yaml:
+            answer = answer.rstrip() + f"\n\n```\n{best_yaml}\n```"
+
+        doc_links = [r.get("link") for r in results if r.get("link")]
+        return self._append_sources(answer, doc_links)
