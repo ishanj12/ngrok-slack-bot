@@ -263,6 +263,95 @@ def _get_user_email(client, user_id: str, logger) -> str:
         return ""
 
 
+def handle_oncall_reaction(event, client, logger):
+    """Handle 🚨 reaction — verify paging permissions and page on-call if eligible."""
+    if event.get("reaction") != "rotating_light":
+        return
+
+    item = event.get("item", {})
+    channel = item.get("channel")
+    message_ts = item.get("ts")
+
+    if not channel or not message_ts:
+        return
+
+    # Only fire in external (Slack Connect) channels
+    try:
+        channel_info = client.conversations_info(channel=channel)
+        if not channel_info["channel"].get("is_ext_shared", False):
+            return
+    except Exception as e:
+        logger.error(f"Error checking channel type: {e}")
+        return
+
+    user_id = event.get("user")
+    email = _get_user_email(client, user_id, logger)
+    if not email:
+        return
+
+    # Check paging permissions via Zendesk org lookup
+    from src.zendesk.client import get_zendesk_client
+    zd_client = get_zendesk_client()
+    org = zd_client.lookup_org_for_email(email)
+
+    org_name = "Unknown"
+    support_package = None
+    if org:
+        org_name = org.get("name", "Unknown")
+        support_package = (org.get("organization_fields") or {}).get("support_package")
+
+    if support_package not in ("premium", "paging"):
+        client.chat_postMessage(
+            channel=channel,
+            thread_ts=message_ts,
+            text="Your support package doesn't include on-call paging. Want to upgrade?",
+        )
+        return
+
+    # Fetch the reacted-to message for context
+    message_text = ""
+    try:
+        history = client.conversations_history(
+            channel=channel, latest=message_ts, limit=1, inclusive=True
+        )
+        messages = history.get("messages", [])
+        if messages:
+            message_text = messages[0].get("text", "")
+    except Exception as e:
+        logger.error(f"Error fetching message: {e}")
+
+    permalink = ""
+    try:
+        permalink = client.chat_getPermalink(
+            channel=channel, message_ts=message_ts
+        ).get("permalink", "")
+    except Exception as e:
+        logger.error(f"Error fetching permalink: {e}")
+
+    from src.datadog.client import page_oncall
+    success = page_oncall(
+        org_name=org_name,
+        message_text=message_text,
+        permalink=permalink,
+        email=email,
+    )
+
+    if success:
+        logger.info(f"On-call paged for {email} ({org_name})")
+        client.chat_postMessage(
+            channel=channel,
+            thread_ts=message_ts,
+            text="On-call has been paged. Our team will respond shortly.",
+        )
+    else:
+        logger.error(f"Failed to page on-call for {email}")
+        client.chat_postMessage(
+            channel=channel,
+            thread_ts=message_ts,
+            text="Failed to reach on-call. Please try again or email support@ngrok.com.",
+        )
+
+
 def handle_ticket_command(ack, command, client, logger):
     """Handle /ngrok-ticket command - opens a modal to create a support ticket"""
     ack()

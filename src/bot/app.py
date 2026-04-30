@@ -61,6 +61,13 @@ def handle_ticket_button(ack, body, client, logger):
     handle_create_ticket_button(ack, body, client, logger)
 
 
+@app.event("reaction_added")
+def handle_reaction_added(event, client, logger):
+    """Handle 🚨 reaction to trigger on-call paging"""
+    from src.bot.handlers import handle_oncall_reaction
+    handle_oncall_reaction(event, client, logger)
+
+
 def start():
     """Start the Slack bot"""
     handler = SocketModeHandler(app, os.environ.get("SLACK_APP_TOKEN"))
