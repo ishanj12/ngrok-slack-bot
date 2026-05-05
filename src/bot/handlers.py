@@ -252,21 +252,29 @@ def handle_oncall_reaction(event, client, logger):
     message_ts = item.get("ts")
 
     if not channel or not message_ts:
+        logger.warning("[paging] reaction_added event missing channel or ts")
         return
 
-    # Only fire in external (Slack Connect) channels
+    # Only page when a customer (Slack guest) reacts — not internal team members
+    user_id = event.get("user")
     try:
-        channel_info = client.conversations_info(channel=channel)
-        if not channel_info["channel"].get("is_ext_shared", False):
+        user_info = client.users_info(user=user_id)
+        user = user_info["user"]
+        is_guest = user.get("is_ultra_restricted") or user.get("is_restricted")
+        logger.info(f"[paging] user={user_id} is_ultra_restricted={user.get('is_ultra_restricted')} is_restricted={user.get('is_restricted')}")
+        if not is_guest:
+            logger.info("[paging] skipping — reacting user is not a guest")
             return
     except Exception as e:
-        logger.error(f"Error checking channel type: {e}")
+        logger.error(f"[paging] error checking user type: {e}")
         return
 
-    user_id = event.get("user")
     email = _get_user_email(client, user_id, logger)
     if not email:
+        logger.warning(f"[paging] could not resolve email for user {user_id}")
         return
+
+    logger.info(f"[paging] 🚨 from {email} in {channel}")
 
     # Check paging permissions via Zendesk org lookup
     from src.zendesk.client import get_zendesk_client
@@ -278,6 +286,8 @@ def handle_oncall_reaction(event, client, logger):
     if org:
         org_name = org.get("name", "Unknown")
         support_package = (org.get("organization_fields") or {}).get("support_package")
+
+    logger.info(f"[paging] org={org_name} support_package={support_package}")
 
     if support_package not in ("premium", "paging"):
         client.chat_postMessage(
