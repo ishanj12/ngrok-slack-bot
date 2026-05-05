@@ -141,30 +141,9 @@ def handle_dm(event, say, client, logger):
         return
     
     is_dm = event.get("channel_type") == "im"
-    is_thread_reply = event.get("thread_ts") is not None and event.get("thread_ts") != event.get("ts")
     
-    if not is_dm and not is_thread_reply:
+    if not is_dm:
         return
-    
-    # For thread replies in channels, only respond if the bot participated in the thread
-    if is_thread_reply and not is_dm:
-        try:
-            result = client.conversations_replies(
-                channel=event["channel"], ts=event["thread_ts"], limit=50
-            )
-            bot_info = client.auth_test()
-            bot_user_id = bot_info["user_id"]
-            bot_bot_id = bot_info.get("bot_id")
-            bot_in_thread = any(
-                msg.get("user") == bot_user_id
-                or (bot_bot_id and msg.get("bot_id") == bot_bot_id)
-                for msg in result.get("messages", [])
-            )
-            if not bot_in_thread:
-                return
-        except Exception as e:
-            logger.error(f"Error checking thread participation: {e}")
-            return
     
     try:
         text = event.get("text", "").strip()
